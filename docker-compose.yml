@@ -1,0 +1,143 @@
+# docker-compose.yml
+# This file defines all services that make up Fraudscope locally
+# Run: docker compose up --build
+# Stop: docker compose down
+# Stop and delete all data: docker compose down -v
+
+services:
+  # ─────────────────────────────────────────
+  # PostgreSQL - primary database
+  # Stores users, transactions, alerts, rules, audit logs
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine # alpine - smaller image, same postgres
+    container_name: fraudscope_postgres
+    environment:
+      POSTGRES_USER: fraudscope # database username
+      POSTGRES_PASSWORD: fraudscope123 # database password (local dev only)
+      POSTGRES_DB: fraudscope #database name auto-created on first start
+    ports:
+      - "5432:5432" # lets you connect via TablePlus/psql from your laptop
+    volumes:
+      - pgdata:/var/lib/postgresql/data # data survives docker compose down
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fraudscope -d fraudscope"]
+      interval: 5s # checks every 5 seconds
+      timeout: 5s  # fail if no respone within 5 seconds
+      retries: 10 # try 10 times before giving up
+      start_period: 10s # give postgres 10s to boot before first check 
+    networks:
+      - fraudscope_network
+  
+  # ─────────────────────────────────────────
+  # Redis — queue, pub/sub, and cache
+  # Handles: tx:incoming stream, alerts:new pub/sub, velocity counters
+  # ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: fraudscope_redis
+    ports:
+      - "6379:6379" # lets you run redis-cli from your laptop
+    volumes:
+      - redisdata:/data # persists redis data across restarts
+    command: redis-server --appendonly yes # enables AOF persistence (data survives restart)
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - fraudscope_network
+
+  # ─────────────────────────────────────────
+  # API — Node.js/Express backend
+  # Handles all HTTP requests, auth, transaction ingestion
+  # ─────────────────────────────────────────
+  api:
+    build: 
+      context: ./apps/api # build using Dockerfile in apps/api
+      dockerfile: Dockerfile
+    container_name: fraudscope_api
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://fraudscope:fraudscope123@postgres:5432/fraudscope
+      #                                                   ^^^^^^^^
+      #                           This is the service name, not localhost!
+      #                           Docker resolves 'postgres' to the container's IP
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: dev_access_secret_change_in_production
+      JWT_REFRESH_SECRET: dev_refresh_secret_change_in_production
+      JWT_ACCESS_EXPIRY: 15m
+      JWT_REFRESH_EXPIRY: 7d
+      API_KEY: dev_api_key_fraudscope
+      CORS_ORIGIN: http://localhost:3000
+      LOG_LEVEL: debug
+      SIM_ENABLED: false
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./apps/api:/app # mounts your local code into the container
+      - /app/node_modules # prevents local node_modules overwriting container's
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy # waits until postgres healthcheck passes
+      redis:
+        condition: service_healthy # waits until redis healthcheck passes
+    networks:
+      - fraudscope_network
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # Worker — Rule engine process
+  # Reads from Redis Stream, evaluates rules, creates alerts
+  # Runs as a SEPARATE process from the API (different container)
+  # ─────────────────────────────────────────
+  worker:
+    build: 
+      context: ./apps/api # same codebase as API, different entry point
+      dockerfile: Dockerfile.worker    # separate Dockerfile that runs the worker
+    container_name: fraudscope_worker
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://fraudscope:fraudscope123@postgres:5432/fraudscope
+      REDIS_URL: redis://redis:6379
+      ENGINE_POLL_INTERVAL: 100
+      ENGINE_BATCH_SIZE: 10
+      RULE_CACHE_TTL: 60
+      LOG_LEVEL: debug
+    volumes:
+      - ./apps/api:/app
+      - /app/node_modules
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/worker-health"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - fraudscope_network
+    restart: unless-stopped
+
+# ─────────────────────────────────────────
+# Named volumes — data lives here even after containers stop
+# Run 'docker compose down -v' to delete these (wipes all data)
+# ─────────────────────────────────────────
+volumes:
+  pgdata:
+  redisdata:
+
+# ─────────────────────────────────────────
+# Network — all services talk to each other on this network
+# Services reference each other by service name (postgres, redis, api, worker)
+# ─────────────────────────────────────────
+networks:
+  fraudscope_network:
+    driver: bridge

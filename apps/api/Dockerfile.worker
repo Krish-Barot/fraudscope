@@ -1,0 +1,15 @@
+# apps/api/Dockerfile.worker
+# Same image as API but starts the worker process instead
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install
+
+COPY . .
+
+# Worker has a different start command
+CMD ["npm", "run", "worker"]

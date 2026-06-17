@@ -13,15 +13,18 @@ WORKDIR /app
 # it skips npm install on the next build (much faster)
 COPY package*.json ./
 
+# Copy the api package.json
+COPY apps/api/package*.json ./apps/api/
+
 # Install dependencies
 RUN npm install
 
-# Copy the rest of the source code
-COPY . .
+# Copy the api source code
+COPY apps/api/ ./apps/api/
 
 # Expose port 3001 so Docker knows this container uses it
 EXPOSE 3001
 
 # Command to start the API server
 # tsx runs TypeScript directly — no compile step needed in development
-CMD ["npm", "run", "dev"]
+CMD ["npm", "run", "dev", "--workspace=apps/api"]

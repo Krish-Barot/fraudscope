@@ -56,12 +56,12 @@ services:
   # ─────────────────────────────────────────
   api:
     build: 
-      context: ./apps/api # build using Dockerfile in apps/api
-      dockerfile: Dockerfile
+      context: . # build using Dockerfile in apps/api
+      dockerfile: apps/api/Dockerfile
     container_name: fraudscope_api
     environment:
       NODE_ENV: development
-      PORT: 3001
+      PORT: 3002
       DATABASE_URL: postgresql://fraudscope:fraudscope123@postgres:5432/fraudscope
       #                                                   ^^^^^^^^
       #                           This is the service name, not localhost!
@@ -76,12 +76,12 @@ services:
       LOG_LEVEL: debug
       SIM_ENABLED: false
     ports:
-      - "3001:3001"
+      - "3002:3002"
     volumes:
-      - ./apps/api:/app # mounts your local code into the container
-      - /app/node_modules # prevents local node_modules overwriting container's
+      - .:/app                      # ← mount whole repo
+      - /app/node_modules           # ← protect container's node_modules
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -101,8 +101,8 @@ services:
   # ─────────────────────────────────────────
   worker:
     build: 
-      context: ./apps/api # same codebase as API, different entry point
-      dockerfile: Dockerfile.worker    # separate Dockerfile that runs the worker
+      context: . # same codebase as API, different entry point
+      dockerfile: apps/api/Dockerfile.worker   # separate Dockerfile that runs the worker
     container_name: fraudscope_worker
     environment:
       NODE_ENV: development
@@ -113,7 +113,7 @@ services:
       RULE_CACHE_TTL: 60
       LOG_LEVEL: debug
     volumes:
-      - ./apps/api:/app
+      - .:/app
       - /app/node_modules
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/worker-health"]

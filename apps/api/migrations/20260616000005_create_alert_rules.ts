@@ -32,10 +32,10 @@ export async function up(knex: Knex): Promise<void> {
   await knex.raw('CREATE INDEX idx_alert_rules_alert ON alert_rules(alert_id)');
   await knex.raw('CREATE INDEX idx_alert_rules_rule ON alert_rules(rule_id)');
 
-  console.log('✓ Created alert_rules table');
+  console.log('✅ Created alert_rules table');
 }
 
 export async function down(knex: Knex): Promise<void> {
   await knex.schema.dropTableIfExists('alert_rules');
-  console.log('✓ Dropped alert_rules table');
+  console.log('✅ Dropped alert_rules table');
 }

@@ -49,12 +49,12 @@ export async function up(knex: Knex): Promise<void> {
     "CREATE INDEX idx_users_role ON users(role) WHERE is_active = true",
   );
 
-  console.log("✓ Created users table");
+  console.log("✅ Created users table");
 }
 
 export async function down(knex: Knex): Promise<void> {
   // Drop indexes first, then the table
   // 'down' must perfectly reverse everything 'up' did
   await knex.schema.dropTableIfExists("users");
-  console.log("✓ Dropped users table");
+  console.log("✅ Dropped users table");
 }

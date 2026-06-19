@@ -63,10 +63,10 @@ export async function up(knex: Knex): Promise<void> {
   await knex.raw(`CREATE INDEX idx_alerts_assigned ON alerts(assigned_to) 
     WHERE status IN ('reviewing', 'investigating')`);
 
-  console.log("✓ Created alerts table");
+  console.log("✅ Created alerts table");
 }
 
 export async function down(knex: Knex): Promise<void> {
   await knex.schema.dropTableIfExists("alerts");
-  console.log("✓ Dropped alerts table");
+  console.log("✅ Dropped alerts table");
 }

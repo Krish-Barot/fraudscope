@@ -58,10 +58,10 @@ export async function up(knex: Knex): Promise<void> {
     "CREATE INDEX idx_audit_created ON audit_logs(created_at DESC)",
   );
 
-  console.log("✓ Created audit_logs table");
+  console.log("✅ Created audit_logs table");
 }
 
 export async function down(knex: Knex): Promise<void> {
   await knex.schema.dropTableIfExists("audit_logs");
-  console.log("✓ Dropped audit_logs table");
+  console.log("✅ Dropped audit_logs table");
 }

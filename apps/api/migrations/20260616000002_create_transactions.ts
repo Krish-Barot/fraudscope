@@ -59,10 +59,10 @@ export async function up(knex: Knex): Promise<void> {
   await knex.raw('CREATE INDEX idx_tx_country ON transactions(country_code, created_at DESC)');
   await knex.raw('CREATE INDEX idx_tx_created ON transactions(created_at DESC)');
 
-  console.log('✓ Created transactions table');
+  console.log('✅ Created transactions table');
 }
 
 export async function down(knex: Knex): Promise<void> {
   await knex.schema.dropTableIfExists('transactions');
-  console.log('✓ Dropped transactions table');
+  console.log('✅ Dropped transactions table');
 }

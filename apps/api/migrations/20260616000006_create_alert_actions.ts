@@ -52,10 +52,10 @@ export async function up(knex: Knex): Promise<void> {
     "CREATE INDEX idx_alert_actions_analyst ON alert_actions(analyst_id, created_at DESC)",
   );
 
-  console.log("✓ Created alert_actions table");
+  console.log("✅ Created alert_actions table");
 }
 
 export async function down(knex: Knex): Promise<void> {
   await knex.schema.dropTableIfExists("alert_actions");
-  console.log("✓ Dropped alert_actions table");
+  console.log("✅ Dropped alert_actions table");
 }

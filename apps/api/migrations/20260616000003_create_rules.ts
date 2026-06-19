@@ -38,10 +38,10 @@ export async function up(knex: Knex): Promise<void> {
     table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(knex.fn.now());
   });
 
-  console.log('✓ Created rules table');
+  console.log('✅ Created rules table');
 }
 
 export async function down(knex: Knex): Promise<void> {
   await knex.schema.dropTableIfExists('rules');
-  console.log('✓ Dropped rules table');
+  console.log('✅ Dropped rules table');
 }

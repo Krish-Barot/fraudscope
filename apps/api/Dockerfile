@@ -19,6 +19,10 @@ COPY apps/api/package*.json ./apps/api/
 # Install dependencies
 RUN npm install
 
+# Add workspace node_modules/.bin to PATH
+# This makes tsx, knex, and all other CLI tools available everywhere
+ENV PATH="/app/node_modules/.bin:$PATH"
+
 # Copy the api source code
 COPY apps/api/ ./apps/api/
 

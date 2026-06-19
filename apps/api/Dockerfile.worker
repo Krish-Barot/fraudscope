@@ -10,6 +10,8 @@ COPY apps/api/package*.json ./apps/api/
 
 RUN npm install
 
+ENV PATH="/app/node_modules/.bin:$PATH"
+
 COPY apps/api/ ./apps/api/
 
 CMD ["npm", "run", "worker", "--workspace=apps/api"]

@@ -8,9 +8,10 @@
     "start": "node dist/index.js",
     "build": "tsc",
     "worker": "tsx src/engine/worker.ts",
-    "migrate": "knex migrate:latest --knexfile src/config/knexfile.ts",
-    "migrate:rollback": "knex migrate:rollback --knexfile src/config/knexfile.ts",
-    "seed": "knex seed:run --knexfile src/config/knexfile.ts",
+    "migrate": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:latest --knexfile src/config/knexfile.js",
+    "migrate:rollback": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:rollback --knexfile src/config/knexfile.js",
+    "migrate:status": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:status --knexfile src/config/knexfile.js",
+    "seed": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex seed:run --knexfile src/config/knexfile.js",
     "test": "jest --config jest.config.ts --runInBand",
     "lint": "eslint src/ --ext .ts"
   },
@@ -43,10 +44,5 @@
     "ts-jest": "^29.1.4",
     "tsx": "^4.15.7",
     "typescript": "^5.4.5"
-  },
-
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  }
 }

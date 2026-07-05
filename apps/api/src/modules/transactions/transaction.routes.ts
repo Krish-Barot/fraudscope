@@ -1,9 +1,9 @@
 // apps/api/src/modules/transactions/transaction.routes.ts
-// Wires URL paths to controller functions
-// Also applies route-specific middleware (apiKeyAuth on POST)
 
 import { Router } from 'express';
 import { apiKeyAuth } from '../../middleware/apiKeyAuth';
+import { authenticate } from '../../middleware/authenticate';
+import { authorize } from '../../middleware/authorize';
 import {
   createTransaction,
   getTransactions,
@@ -13,15 +13,15 @@ import {
 const router = Router();
 
 // POST /api/v1/transactions
-// Protected by API key — only trusted systems can ingest transactions
+// Machine-to-machine — protected by API key
 router.post('/', apiKeyAuth, createTransaction);
 
 // GET /api/v1/transactions
-// Will be protected by JWT in FS-20 (auth sprint)
-// For now, open so we can test during development
-router.get('/', getTransactions);
+// Human analyst — protected by JWT
+// authorize('analyst', 'admin') means both roles can access
+router.get('/', authenticate, authorize('analyst', 'admin'), getTransactions);
 
 // GET /api/v1/transactions/:id
-router.get('/:id', getTransaction);
+router.get('/:id', authenticate, authorize('analyst', 'admin'), getTransaction);
 
 export default router;

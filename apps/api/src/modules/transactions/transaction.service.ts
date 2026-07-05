@@ -1,25 +1,17 @@
 // apps/api/src/modules/transactions/transaction.service.ts
 // Business logic for transaction operations
-// This layer handles: DB writes, Redis stream, pub/sub, audit logs
-// It does NOT know about HTTP (no req/res objects here)
 
 import { db } from '../../config/database';
 import { redisClient, redisPublisher } from '../../config/redis';
 import { CreateTransactionInput } from './transaction.schema';
 
-// ─────────────────────────────────────────
-// Redis channel and stream names
-// Defined as constants so they're consistent everywhere
-// ─────────────────────────────────────────
-const TX_STREAM = 'tx:incoming';    // Redis Stream — worker reads from here
-const TX_PUBSUB = 'tx:live';       // Redis PubSub — dashboard subscribes to this
+const TX_STREAM = 'tx:incoming';
+const TX_PUBSUB = 'tx:live';
 
+// ─────────────────────────────────────────
+// Ingest a new transaction (FS-04 — unchanged)
+// ─────────────────────────────────────────
 export async function ingestTransaction(input: CreateTransactionInput) {
-  // ─────────────────────────────────────────
-  // Step 1: Insert into PostgreSQL
-  // ─────────────────────────────────────────
-  // knex insert returns an array of inserted rows
-  // We request all columns back with returning('*')
   const [transaction] = await db('transactions')
     .insert({
       external_id: input.external_id,
@@ -34,22 +26,12 @@ export async function ingestTransaction(input: CreateTransactionInput) {
       latitude: input.latitude || null,
       longitude: input.longitude || null,
       channel: input.channel || null,
-      status: 'clean', // always starts clean — worker changes to 'flagged' if needed
+      status: 'clean',
     })
-    .returning('*'); // return the full inserted row (including generated id and created_at)
+    .returning('*');
 
-  // ─────────────────────────────────────────
-  // Step 2: Push to Redis Stream (tx:incoming)
-  // ─────────────────────────────────────────
-  // XADD adds a message to a stream
-  // '*' tells Redis to auto-generate the message ID (timestamp-based)
-  // The worker (Sprint 2) reads from this stream and evaluates fraud rules
-  //
-  // Redis Streams are like a persistent log — messages stay until acknowledged
-  // Unlike pub/sub, if the worker is down, messages wait for it to come back
   await redisClient.xadd(
-    TX_STREAM,          // stream name
-    '*',                // auto-generate message ID
+    TX_STREAM, '*',
     'id', transaction.id,
     'external_id', transaction.external_id,
     'account_id', transaction.account_id,
@@ -59,18 +41,7 @@ export async function ingestTransaction(input: CreateTransactionInput) {
     'channel', transaction.channel || '',
     'created_at', transaction.created_at.toISOString(),
   );
-  // Note: Redis Stream values must be strings — numbers get converted above
 
-  // ─────────────────────────────────────────
-  // Step 3: Publish to Redis PubSub (tx:live)
-  // ─────────────────────────────────────────
-  // PUBLISH broadcasts a message to all current subscribers
-  // The WebSocket server (Sprint 3) subscribes to this channel
-  // and forwards messages to connected dashboard clients
-  //
-  // Unlike Streams, PubSub is fire-and-forget:
-  // if nobody is subscribed right now, the message is lost
-  // That's fine for the live feed — it's real-time, not historical
   await redisPublisher.publish(
     TX_PUBSUB,
     JSON.stringify({
@@ -86,15 +57,9 @@ export async function ingestTransaction(input: CreateTransactionInput) {
     })
   );
 
-  // ─────────────────────────────────────────
-  // Step 4: Write to audit_logs
-  // ─────────────────────────────────────────
-  // Every ingested transaction is logged
-  // This creates an immutable record: "at this time, this transaction came in"
-  // Useful for debugging, compliance, and "what happened?" investigations
   await db('audit_logs').insert({
     event_type: 'transaction.ingested',
-    actor_type: 'api',            // came in via API key, not a human user
+    actor_type: 'api',
     target_type: 'transaction',
     target_id: transaction.id,
     payload: JSON.stringify({
@@ -109,19 +74,9 @@ export async function ingestTransaction(input: CreateTransactionInput) {
 }
 
 // ─────────────────────────────────────────
-// Get a single transaction by ID
-// Used by the transaction detail page
+// List transactions with filters and pagination (FS-05)
 // ─────────────────────────────────────────
-export async function getTransactionById(id: string) {
-  const transaction = await db('transactions').where({ id }).first();
-  return transaction || null;
-}
-
-// ─────────────────────────────────────────
-// List transactions with filters and pagination
-// Used by the transactions list page
-// ─────────────────────────────────────────
-export async function listTransactions(filters: {
+export interface ListTransactionsFilters {
   status?: string;
   min_amount?: number;
   max_amount?: number;
@@ -131,36 +86,60 @@ export async function listTransactions(filters: {
   page?: number;
   limit?: number;
   sort?: string;
-}) {
-  const page = filters.page || 1;
-  const limit = Math.min(filters.limit || 25, 100); // cap at 100
+}
+
+export async function listTransactions(filters: ListTransactionsFilters) {
+  const page = Math.max(1, filters.page || 1);
+  const limit = Math.min(filters.limit || 25, 100); // hard cap at 100
   const offset = (page - 1) * limit;
 
-  // Build the query dynamically based on which filters are provided
-  // knex's chaining API lets you add conditions only when needed
+  // Build base query
+  // .clone() later lets us reuse the same filters for the COUNT query
   let query = db('transactions');
 
-  if (filters.status) query = query.where('status', filters.status);
-  if (filters.min_amount) query = query.where('amount', '>=', filters.min_amount);
-  if (filters.max_amount) query = query.where('amount', '<=', filters.max_amount);
-  if (filters.country_code) query = query.where('country_code', filters.country_code);
-  if (filters.account_id) query = query.where('account_id', filters.account_id);
-  if (filters.channel) query = query.where('channel', filters.channel);
+  // Apply filters only when they are provided
+  // This builds a WHERE clause dynamically
+  if (filters.status) {
+    query = query.where('status', filters.status);
+  }
+  if (filters.min_amount !== undefined) {
+    query = query.where('amount', '>=', filters.min_amount);
+  }
+  if (filters.max_amount !== undefined) {
+    query = query.where('amount', '<=', filters.max_amount);
+  }
+  if (filters.country_code) {
+    query = query.where('country_code', filters.country_code.toUpperCase());
+  }
+  if (filters.account_id) {
+    query = query.where('account_id', filters.account_id);
+  }
+  if (filters.channel) {
+    query = query.where('channel', filters.channel);
+  }
 
-  // Count total matching rows (for pagination metadata)
-  const [{ count }] = await query.clone().count('id as count');
+  // Run COUNT query using the same filters
+  // .clone() copies the query without the ORDER BY / LIMIT / OFFSET
+  // which would make COUNT behave unexpectedly
+  const [{ count }] = await query
+    .clone()
+    .count('id as count');
   const total = parseInt(count as string, 10);
 
-  // Parse sort parameter — format is "field:direction" e.g. "created_at:desc"
-  const [sortField, sortDir] = (filters.sort || 'created_at:desc').split(':');
-  const allowedSortFields = ['created_at', 'amount', 'account_id'];
-  const field = allowedSortFields.includes(sortField) ? sortField : 'created_at';
+  // Parse sort parameter — "created_at:desc" → field=created_at, direction=desc
+  const sortParam = filters.sort || 'created_at:desc';
+  const [sortField, sortDir] = sortParam.split(':');
+
+  // Whitelist allowed sort fields — prevents SQL injection via sort parameter
+  const allowedFields = ['created_at', 'amount', 'account_id', 'status'];
+  const field = allowedFields.includes(sortField) ? sortField : 'created_at';
   const direction = sortDir === 'asc' ? 'asc' : 'desc';
 
   const data = await query
     .orderBy(field, direction)
     .limit(limit)
-    .offset(offset);
+    .offset(offset)
+    .select('*');
 
   return {
     data,
@@ -170,5 +149,71 @@ export async function listTransactions(filters: {
       total,
       pages: Math.ceil(total / limit),
     },
+  };
+}
+
+// ─────────────────────────────────────────
+// Get single transaction with enriched data (FS-05)
+// Returns: transaction + its alerts + last 10 transactions from same account
+// ─────────────────────────────────────────
+export async function getTransactionById(id: string) {
+  // Fetch the transaction itself
+  const transaction = await db('transactions')
+    .where({ id })
+    .first();
+
+  if (!transaction) {
+    return null;
+  }
+
+  // Fetch related alerts for this transaction
+  // A transaction can have multiple alerts if multiple rules fire
+  // We also join alert_rules to get which rules triggered
+  const alerts = await db('alerts')
+    .where('transaction_id', id)
+    .orderBy('risk_score', 'desc')
+    .select('*');
+
+  // For each alert, fetch which rules triggered it
+  // This gives us the "why was this flagged" data for the UI
+  const alertsWithRules = await Promise.all(
+    alerts.map(async (alert) => {
+      const triggeredRules = await db('alert_rules')
+        .join('rules', 'alert_rules.rule_id', 'rules.id')
+        .where('alert_rules.alert_id', alert.id)
+        .select(
+          'alert_rules.score_contribution',
+          'alert_rules.details',
+          'rules.name',
+          'rules.type',
+          'rules.severity'
+        );
+      return { ...alert, triggered_rules: triggeredRules };
+    })
+  );
+
+  // Fetch the last 10 transactions from the same account
+  // Excludes the current transaction (WHERE id != current id)
+  // Used by the account timeline on the transaction detail page
+  const accountHistory = await db('transactions')
+    .where('account_id', transaction.account_id)
+    .whereNot('id', id)                     // exclude current transaction
+    .orderBy('created_at', 'desc')
+    .limit(10)
+    .select(
+      'id',
+      'amount',
+      'currency',
+      'merchant_name',
+      'country_code',
+      'channel',
+      'status',
+      'created_at'
+    );
+
+  return {
+    ...transaction,
+    alerts: alertsWithRules,
+    account_history: accountHistory,
   };
 }

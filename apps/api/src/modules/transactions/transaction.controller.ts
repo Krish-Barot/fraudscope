@@ -1,36 +1,30 @@
 // apps/api/src/modules/transactions/transaction.controller.ts
-// HTTP layer — reads request, calls service, sends response
-// Controllers are thin: validate → call service → respond
-// All business logic lives in the service
 
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { createTransactionSchema } from './transaction.schema';
-import { ingestTransaction, getTransactionById, listTransactions } from './transaction.service';
+import {
+  ingestTransaction,
+  getTransactionById,
+  listTransactions,
+} from './transaction.service';
 
-// POST /api/v1/transactions
+// POST /api/v1/transactions — FS-04 (unchanged)
 export async function createTransaction(
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   try {
-    // Parse and validate the request body against the Zod schema
-    // .parse() throws a ZodError if validation fails
     const input = createTransactionSchema.parse(req.body);
-
     const transaction = await ingestTransaction(input);
 
-    // 202 Accepted — transaction saved and queued for fraud evaluation
-    // The evaluation happens asynchronously in the worker
     res.status(202).json({
       transaction,
       queued: true,
       message: 'Transaction accepted and queued for fraud evaluation',
     });
   } catch (error) {
-    // Handle Zod validation errors specifically
-    // ZodError has a .errors array with field-level details
     if (error instanceof ZodError) {
       res.status(400).json({
         error: {
@@ -47,8 +41,6 @@ export async function createTransaction(
       return;
     }
 
-    // Handle PostgreSQL unique constraint violation
-    // This happens when external_id already exists
     if ((error as any).code === '23505') {
       res.status(409).json({
         error: {
@@ -61,46 +53,52 @@ export async function createTransaction(
       return;
     }
 
-    // Pass anything else to the global error handler
     next(error);
   }
 }
 
-// GET /api/v1/transactions
+// GET /api/v1/transactions — FS-05
 export async function getTransactions(
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   try {
-    const result = await listTransactions({
-      status: req.query.status as string,
-      min_amount: req.query.min_amount ? Number(req.query.min_amount) : undefined,
-      max_amount: req.query.max_amount ? Number(req.query.max_amount) : undefined,
-      country_code: req.query.country_code as string,
-      account_id: req.query.account_id as string,
-      channel: req.query.channel as string,
+    // Parse and sanitize query parameters
+    // req.query values are always strings — convert numbers explicitly
+    const filters = {
+      status: req.query.status as string | undefined,
+      min_amount: req.query.min_amount
+        ? Number(req.query.min_amount)
+        : undefined,
+      max_amount: req.query.max_amount
+        ? Number(req.query.max_amount)
+        : undefined,
+      country_code: req.query.country_code as string | undefined,
+      account_id: req.query.account_id as string | undefined,
+      channel: req.query.channel as string | undefined,
       page: req.query.page ? Number(req.query.page) : 1,
       limit: req.query.limit ? Number(req.query.limit) : 25,
-      sort: req.query.sort as string,
-    });
+      sort: req.query.sort as string | undefined,
+    };
 
+    const result = await listTransactions(filters);
     res.status(200).json(result);
   } catch (error) {
     next(error);
   }
 }
 
-// GET /api/v1/transactions/:id
+// GET /api/v1/transactions/:id — FS-05
 export async function getTransaction(
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   try {
-    const transaction = await getTransactionById(req.params.id);
+    const result = await getTransactionById(req.params.id);
 
-    if (!transaction) {
+    if (!result) {
       res.status(404).json({
         error: {
           code: 'NOT_FOUND',
@@ -111,7 +109,7 @@ export async function getTransaction(
       return;
     }
 
-    res.status(200).json({ transaction });
+    res.status(200).json(result);
   } catch (error) {
     next(error);
   }

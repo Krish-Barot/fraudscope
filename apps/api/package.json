@@ -8,6 +8,7 @@
     "start": "node dist/index.js",
     "build": "tsc",
     "worker": "tsx src/engine/worker.ts",
+    "simulate": "tsx src/simulator/index.ts",
     "migrate": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:latest --knexfile src/config/knexfile.js",
     "migrate:rollback": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:rollback --knexfile src/config/knexfile.js",
     "migrate:status": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:status --knexfile src/config/knexfile.js",

@@ -3,10 +3,24 @@
 // to run queries. Import 'db' from here whenever you need to query.
 
 import knex from 'knex';
-import knexConfig from './knexfile';
+import dotenv from 'dotenv';
+import path from 'path';
+
+const knexConfig = require('./knexfile');
+
+dotenv.config({
+  path: path.resolve(__dirname, "../../../../.env"),
+});
 
 // Pick the right config based on NODE_ENV
 const environment = process.env.NODE_ENV || 'development';
+
+if (!knexConfig[environment]) {
+  throw new Error(
+    `No Knex configuration found for environment: ${environment}`
+  );
+}
+
 const config = knexConfig[environment];
 
 // Create and export the database connection

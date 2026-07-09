@@ -29,6 +29,19 @@ services:
     networks:
       - fraudscope_network
   
+  # Test database — separate from dev so tests don't pollute real data
+  # Only used when running npm test
+  postgres_test:
+    image: postgres:16-alpine
+    container_name: fraudscope_postgres_test
+    environment:
+      POSTGRES_USER: fraudscope
+      POSTGRES_PASSWORD: fraudscope123
+      POSTGRES_DB: fraudscope_test
+    ports:
+      - "5433:5432"    # different host port (5433) so it doesn't clash with main postgres
+    networks:
+      - fraudscope_network
   # ─────────────────────────────────────────
   # Redis — queue, pub/sub, and cache
   # Handles: tx:incoming stream, alerts:new pub/sub, velocity counters
@@ -66,6 +79,7 @@ services:
       #                                                   ^^^^^^^^
       #                           This is the service name, not localhost!
       #                           Docker resolves 'postgres' to the container's IP
+      TEST_DATABASE_URL: postgresql://fraudscope:fraudscope123@postgres_test:5432/fraudscope_test
       REDIS_URL: redis://redis:6379
       JWT_ACCESS_SECRET: dev_access_secret_change_in_production
       JWT_REFRESH_SECRET: dev_refresh_secret_change_in_production

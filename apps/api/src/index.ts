@@ -62,9 +62,9 @@ async function start() {
   await connectDatabase();
 
   app.listen(PORT, () => {
-    console.log(`✓ FraudScope API running on port ${PORT}`);
-    console.log(`  Health check: http://localhost:${PORT}/health`);
-    console.log(`  Transactions: http://localhost:${PORT}/api/v1/transactions`);
+    console.log(`✅ FraudScope API running on port ${PORT}`);
+    console.log(`✅ Health check: http://localhost:${PORT}/health`);
+    console.log(`✅ Transactions: http://localhost:${PORT}/api/v1/transactions`);
   });
 }
 

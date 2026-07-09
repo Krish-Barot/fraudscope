@@ -13,7 +13,7 @@
     "migrate:rollback": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:rollback --knexfile src/config/knexfile.js",
     "migrate:status": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:status --knexfile src/config/knexfile.js",
     "seed": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex seed:run --knexfile src/config/knexfile.js",
-    "test": "jest --config jest.config.ts --runInBand",
+    "test": "NODE_ENV=test jest --config jest.config.js --runInBand",
     "lint": "eslint src/ --ext .ts"
   },
   "dependencies": {
@@ -43,6 +43,7 @@
     "jest": "^29.7.0",
     "supertest": "^7.0.0",
     "ts-jest": "^29.1.4",
+    "ts-node": "^10.9.2",
     "tsx": "^4.15.7",
     "typescript": "^5.4.5"
   }

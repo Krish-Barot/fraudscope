@@ -202,6 +202,7 @@ export async function getTransactionById(id: string) {
     .limit(10)
     .select(
       'id',
+      'account_id',
       'amount',
       'currency',
       'merchant_name',

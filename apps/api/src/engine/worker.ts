@@ -2,10 +2,12 @@
 // Rule engine worker — reads from Redis Stream and evaluates transactions
 // Placeholder for Sprint 2 (FS-09 through FS-16)
 
-console.log('FraudScope Worker starting...');
-console.log('Waiting for Sprint 2 implementation...');
+import { validateEnv } from "../config/env";
+validateEnv();
 
-// Keep the process alive so Docker does not restart it in a loop
+console.log("FraudScope Worker starting...");
+console.log("Waiting for Sprint 2 implementation...");
+
 setInterval(() => {
-  console.log('Worker heartbeat — ready for Sprint 2');
+  console.log("Worker heartbeat — ready for Sprint 2");
 }, 30000);

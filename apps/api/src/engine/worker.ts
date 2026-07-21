@@ -27,7 +27,8 @@ const env = validateWorkerEnv();
 
 import Redis from 'ioredis';
 import { db } from '../config/database';
-import { evaluate, scoreToSeverity, TransactionData } from './scorer';
+import { evaluate, scoreToSeverity } from './scorer';
+import { TransactionData } from './rules/types';
 
 // ─────────────────────────────────────────
 // Configuration

@@ -3,8 +3,8 @@
 // ── Env validation FIRST ──────────────────────────────────────────
 // Must run before any other module that reads process.env
 // If validation fails, process.exit(1) is called here and nothing else runs
-import { validateEnv } from './config/env';
-const env = validateEnv();
+import { validateApiEnv } from './config/env';
+const env = validateApiEnv();
 // ─────────────────────────────────────────────────────────────────
 
 import express from 'express';

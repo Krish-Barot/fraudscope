@@ -12,12 +12,22 @@
 // Together they create a fixed-size sliding window of recent countries
 // that never grows beyond lookback_count
 
-import { z } from 'zod';
-import { RuleEvaluator, RuleResult, TransactionData, RuleContext } from './types';
+import { z } from "zod";
+import { TransactionData, RuleContext, RuleResult, severityToScore } from './types';
 
 // Countries frequently associated with card fraud
 // Transactions from these trigger a higher score than unknown-but-not-high-risk countries
-const HIGH_RISK_COUNTRIES = new Set(['NG', 'RU', 'KP', 'IR', 'VE', 'BY', 'PH', 'RO', 'UA']);
+const HIGH_RISK_COUNTRIES = new Set([
+  "NG",
+  "RU",
+  "KP",
+  "IR",
+  "VE",
+  "BY",
+  "PH",
+  "RO",
+  "UA",
+]);
 
 export const parameterSchema = z.object({
   lookback_count: z.number().int().min(3).max(20),
@@ -27,13 +37,17 @@ export const parameterSchema = z.object({
 export async function evaluate(
   transaction: TransactionData,
   parameters: Record<string, unknown>,
-  context: RuleContext
+  context: RuleContext,
 ): Promise<RuleResult> {
   const params = parameterSchema.parse(parameters);
   const { lookback_count, alert_on_new_country } = params;
 
   if (!alert_on_new_country) {
-    return { triggered: false, score: 0, details: { rule_type: 'geo_mismatch', skipped: 'disabled' } };
+    return {
+      triggered: false,
+      score: 0,
+      details: { rule_type: "geo_mismatch", skipped: "disabled" },
+    };
   }
 
   const key = `geo:${transaction.account_id}:countries`;
@@ -43,19 +57,22 @@ export async function evaluate(
 
   // If no Redis data, fall back to PostgreSQL
   if (recentCountries.length === 0) {
-    const recentTxs = await context.db('transactions')
-      .where('account_id', transaction.account_id)
-      .whereNot('id', transaction.id)
-      .orderBy('created_at', 'desc')
+    const recentTxs = await context
+      .db("transactions")
+      .where("account_id", transaction.account_id)
+      .whereNot("id", transaction.id)
+      .orderBy("created_at", "desc")
       .limit(lookback_count)
-      .select('country_code');
+      .select("country_code");
 
-    recentCountries = recentTxs.map((tx: { country_code: string }) => tx.country_code);
+    recentCountries = recentTxs.map(
+      (tx: { country_code: string }) => tx.country_code,
+    );
 
     // Populate Redis cache for next time
     if (recentCountries.length > 0) {
       const pipeline = context.redis.pipeline();
-      recentCountries.forEach(country => pipeline.rpush(key, country));
+      recentCountries.forEach((country) => pipeline.rpush(key, country));
       pipeline.ltrim(key, 0, lookback_count - 1);
       pipeline.expire(key, 7 * 24 * 60 * 60); // 7 days
       await pipeline.exec();
@@ -74,7 +91,7 @@ export async function evaluate(
     return {
       triggered: false,
       score: 0,
-      details: { rule_type: 'geo_mismatch', skipped: 'no_history' },
+      details: { rule_type: "geo_mismatch", skipped: "no_history" },
     };
   }
 
@@ -86,19 +103,21 @@ export async function evaluate(
 
   // High-risk countries get a significantly higher score
   const score = triggered
-    ? (isHighRisk ? 25 : 15)
+    ? isHighRisk
+      ? severityToScore(context.severity) + 5
+      : severityToScore(context.severity)
     : 0;
 
   return {
     triggered,
     score,
     details: {
-      rule_type: 'geo_mismatch',
+      rule_type: "geo_mismatch",
       current_country: transaction.country_code,
       known_countries: Array.from(knownCountries),
       is_high_risk_country: isHighRisk,
       message: triggered
-        ? `Transaction from ${transaction.country_code} — account history shows: ${Array.from(knownCountries).join(', ')}`
+        ? `Transaction from ${transaction.country_code} — account history shows: ${Array.from(knownCountries).join(", ")}`
         : null,
     },
   };

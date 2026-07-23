@@ -10,8 +10,13 @@
 // transactions just under reporting thresholds ($9,999 instead of $10,000)
 // Those aren't perfectly round but are still suspicious at high amounts.
 
-import { z } from 'zod';
-import { RuleEvaluator, RuleResult, TransactionData, RuleContext } from './types';
+import { z } from "zod";
+import {
+  RuleResult,
+  TransactionData,
+  RuleContext,
+  severityToScore,
+} from "./types";
 
 export const parameterSchema = z.object({
   min_amount: z.number().min(0),
@@ -21,35 +26,35 @@ export const parameterSchema = z.object({
 export async function evaluate(
   transaction: TransactionData,
   parameters: Record<string, unknown>,
-  _context: RuleContext
+  context: RuleContext,
 ): Promise<RuleResult> {
   const params = parameterSchema.parse(parameters);
   const { min_amount, tolerance } = params;
 
   if (transaction.amount < min_amount) {
-    return { triggered: false, score: 0, details: { rule_type: 'round_amount', skipped: 'below_min_amount' } };
+    return {
+      triggered: false,
+      score: 0,
+      details: { rule_type: "round_amount", skipped: "below_min_amount" },
+    };
   }
 
   // Check if amount is "round" within the tolerance
   // tolerance=0: only exact multiples of 100 ($1000, $2000, $5000)
   // tolerance=1: also catches near-round ($999, $1001)
   const remainder = transaction.amount % 100;
-  const isRound = remainder <= tolerance || remainder >= (100 - tolerance);
+  const isRound = remainder <= tolerance || remainder >= 100 - tolerance;
 
-  // Also flag exact multiples of 1000 and 500 (even stricter patterns)
   const isExactThousand = transaction.amount % 1000 === 0;
   const isExactFiveHundred = transaction.amount % 500 === 0;
 
   const triggered = isRound;
 
-  // Higher amounts get higher scores
+  // Base score from severity, with bonus for exact thousands
   let score = 0;
   if (triggered) {
-    if (transaction.amount >= 10000) score = 25;
-    else if (transaction.amount >= 5000) score = 20;
-    else score = 15;
-
-    // Bonus for extremely suspicious patterns
+    score = severityToScore(context.severity);
+    // Bonus for exact multiples of 1000 — most suspicious pattern
     if (isExactThousand) score = Math.min(score + 5, 30);
   }
 
@@ -57,7 +62,7 @@ export async function evaluate(
     triggered,
     score,
     details: {
-      rule_type: 'round_amount',
+      rule_type: "round_amount",
       amount: transaction.amount,
       min_amount,
       remainder: Math.round(remainder * 100) / 100,

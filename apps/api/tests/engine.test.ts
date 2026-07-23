@@ -288,3 +288,371 @@ describe('velocity rule — details object', () => {
     );
   });
 });
+
+// ─────────────────────────────────────────
+// Amount Anomaly Rule Tests
+// ─────────────────────────────────────────
+
+import {
+  evaluate as evaluateAmountAnomaly,
+  parameterSchema as amountAnomalySchema,
+} from '../src/engine/rules/amountAnomaly';
+
+// ─────────────────────────────────────────
+// Mock helpers for amount anomaly
+// ─────────────────────────────────────────
+
+function createMockRedisForAmountAnomaly(cachedAverage: string | null) {
+  return {
+    // get() returns the cached average or null (cache miss)
+    get: jest.fn().mockResolvedValue(cachedAverage),
+    // set() stores the computed average — we verify it's called on cache miss
+    set: jest.fn().mockResolvedValue('OK'),
+  };
+}
+
+function createMockDb(averageAmount: number | null) {
+  // Mocks the knex query chain: db('transactions').where(...).avg(...).first()
+  // Each chained method returns an object with the next method
+  const queryBuilder = {
+    where: jest.fn().mockReturnThis(),
+    whereNot: jest.fn().mockReturnThis(),
+    avg: jest.fn().mockReturnThis(),
+    first: jest.fn().mockResolvedValue(
+      averageAmount !== null ? { avg: averageAmount.toString() } : { avg: null }
+    ),
+  };
+
+  // db('transactions') returns the query builder
+  const mockDb = jest.fn().mockReturnValue(queryBuilder);
+  // Also expose the queryBuilder so tests can inspect calls
+  (mockDb as any)._queryBuilder = queryBuilder;
+  (mockDb as any).raw = jest.fn().mockReturnValue('NOW() - INTERVAL \'30 days\'');
+
+  return mockDb;
+}
+
+function makeAmountAnomalyContext(
+  cachedAverage: string | null,
+  dbAverage: number | null,
+  severity: 'low' | 'medium' | 'high' | 'critical' = 'high'
+): RuleContext {
+  return {
+    redis: createMockRedisForAmountAnomaly(cachedAverage) as any,
+    db: createMockDb(dbAverage) as any,
+    severity,
+  };
+}
+
+function makeAmountAnomalyTransaction(amount: number): TransactionData {
+  return {
+    id: 'test-tx-id',
+    external_id: 'TEST-AMOUNT-001',
+    account_id: 'ACC-AMOUNT-01',
+    amount,
+    currency: 'CAD',
+    country_code: 'CA',
+    channel: 'online',
+    created_at: new Date().toISOString(),
+  };
+}
+
+const defaultAmountParams = {
+  multiplier: 3.0,
+  min_amount: 100,
+};
+
+// ─────────────────────────────────────────
+// Parameter schema
+// ─────────────────────────────────────────
+describe('amount_anomaly rule — parameterSchema', () => {
+  test('accepts valid parameters', () => {
+    expect(() =>
+      amountAnomalySchema.parse({ multiplier: 3.0, min_amount: 500 })
+    ).not.toThrow();
+  });
+
+  test('rejects multiplier below 1.5', () => {
+    expect(() =>
+      amountAnomalySchema.parse({ multiplier: 1.4, min_amount: 500 })
+    ).toThrow();
+  });
+
+  test('rejects multiplier above 20', () => {
+    expect(() =>
+      amountAnomalySchema.parse({ multiplier: 21, min_amount: 500 })
+    ).toThrow();
+  });
+
+  test('rejects negative min_amount', () => {
+    expect(() =>
+      amountAnomalySchema.parse({ multiplier: 3.0, min_amount: -1 })
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────
+// Core trigger logic — FS-12 required tests
+// ─────────────────────────────────────────
+describe('amount_anomaly rule — trigger logic', () => {
+
+  // FS-12 required test: triggers at 4x average
+  test('triggers when amount is 4x the 30-day average', async () => {
+    // Account average: $100. Amount: $400 (4x). Multiplier: 3x threshold.
+    // $400 > ($100 * 3.0 = $300) AND $400 > min_amount($100) → triggers
+    const context = makeAmountAnomalyContext(null, 100); // cache miss, DB returns $100 avg
+    const transaction = makeAmountAnomalyTransaction(400);
+
+    const result = await evaluateAmountAnomaly(
+      transaction,
+      defaultAmountParams,
+      context
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.score).toBe(25); // high severity
+    expect(result.details.account_avg).toBe(100);
+    expect(result.details.threshold_amount).toBe(300);
+    expect(result.details.ratio).toBe(4);
+    expect(result.details.message).toContain('4.0x');
+  });
+
+  // FS-12 required test: does not trigger below threshold
+  test('does NOT trigger when amount is below the threshold', async () => {
+    // Account average: $100. Amount: $250. Threshold: $300 (3x).
+    // $250 < $300 → does not trigger
+    const context = makeAmountAnomalyContext(null, 100);
+    const transaction = makeAmountAnomalyTransaction(250);
+
+    const result = await evaluateAmountAnomaly(
+      transaction,
+      defaultAmountParams,
+      context
+    );
+
+    expect(result.triggered).toBe(false);
+    expect(result.score).toBe(0);
+    expect(result.details.message).toBeNull();
+  });
+
+  // Edge case: exactly at the threshold — should NOT trigger (amount must be GREATER than)
+  test('does NOT trigger when amount exactly equals the threshold', async () => {
+    // avg=$100, multiplier=3.0, threshold=$300, amount=$300 → NOT triggered (not >)
+    const context = makeAmountAnomalyContext(null, 100);
+    const transaction = makeAmountAnomalyTransaction(300);
+
+    const result = await evaluateAmountAnomaly(
+      transaction,
+      defaultAmountParams,
+      context
+    );
+
+    expect(result.triggered).toBe(false);
+    expect(result.score).toBe(0);
+  });
+
+  // Just over threshold — should trigger
+  test('triggers when amount is just above the threshold', async () => {
+    // avg=$100, threshold=$300, amount=$300.01 → triggers
+    const context = makeAmountAnomalyContext(null, 100);
+    const transaction = makeAmountAnomalyTransaction(300.01);
+
+    const result = await evaluateAmountAnomaly(
+      transaction,
+      defaultAmountParams,
+      context
+    );
+
+    expect(result.triggered).toBe(true);
+  });
+
+  // Skip when below min_amount
+  test('skips rule when transaction is below min_amount', async () => {
+    // Amount $50 is below min_amount of $100 — skip entirely
+    const context = makeAmountAnomalyContext(null, 20); // avg $20
+    const transaction = makeAmountAnomalyTransaction(50);
+
+    const result = await evaluateAmountAnomaly(
+      transaction,
+      defaultAmountParams, // min_amount: 100
+      context
+    );
+
+    expect(result.triggered).toBe(false);
+    expect(result.score).toBe(0);
+    expect(result.details.skipped).toBe('below_min_amount');
+  });
+
+  // Skip when no account history
+  test('skips rule when account has no 30-day history', async () => {
+    // Cache miss AND database returns null average (new account)
+    const context = makeAmountAnomalyContext(null, null);
+    const transaction = makeAmountAnomalyTransaction(500);
+
+    const result = await evaluateAmountAnomaly(
+      transaction,
+      defaultAmountParams,
+      context
+    );
+
+    expect(result.triggered).toBe(false);
+    expect(result.score).toBe(0);
+    expect(result.details.skipped).toBe('no_account_history');
+  });
+});
+
+// ─────────────────────────────────────────
+// Cache behaviour
+// ─────────────────────────────────────────
+describe('amount_anomaly rule — cache behaviour', () => {
+
+  test('uses cached average when Redis cache is populated (cache HIT)', async () => {
+    // Redis returns cached average of $100
+    const context = makeAmountAnomalyContext('100', null);
+    const transaction = makeAmountAnomalyTransaction(400);
+
+    const result = await evaluateAmountAnomaly(
+      transaction,
+      defaultAmountParams,
+      context
+    );
+
+    // Should trigger based on cached average ($100), not DB
+    expect(result.triggered).toBe(true);
+    expect(result.details.cache_hit).toBe(true);
+
+    // DB should NOT have been queried — cache was sufficient
+    const db = context.db as any;
+    expect(db).not.toHaveBeenCalled();
+  });
+
+  test('queries PostgreSQL on cache MISS and stores result in Redis', async () => {
+    // Cache miss (null), DB returns $100 average
+    const context = makeAmountAnomalyContext(null, 100);
+    const transaction = makeAmountAnomalyTransaction(400);
+
+    await evaluateAmountAnomaly(transaction, defaultAmountParams, context);
+
+    // DB should have been queried
+    expect(context.db).toHaveBeenCalledWith('transactions');
+
+    // Redis set() should have been called to cache the result
+    expect(context.redis.set).toHaveBeenCalledWith(
+      `avg:${transaction.account_id}`,
+      '100',
+      'EX',
+      3600  // 1 hour TTL
+    );
+  });
+
+  test('does NOT call Redis set() on cache HIT', async () => {
+    // Average already cached — no need to write to Redis again
+    const context = makeAmountAnomalyContext('100', null);
+    const transaction = makeAmountAnomalyTransaction(400);
+
+    await evaluateAmountAnomaly(transaction, defaultAmountParams, context);
+
+    expect(context.redis.set).not.toHaveBeenCalled();
+  });
+
+  test('uses correct Redis cache key format', async () => {
+    const context = makeAmountAnomalyContext(null, 100);
+    const transaction = makeAmountAnomalyTransaction(400);
+    transaction.account_id = 'ACC-0099';
+
+    await evaluateAmountAnomaly(transaction, defaultAmountParams, context);
+
+    expect(context.redis.get).toHaveBeenCalledWith('avg:ACC-0099');
+  });
+});
+
+// ─────────────────────────────────────────
+// Severity scoring
+// ─────────────────────────────────────────
+describe('amount_anomaly rule — severity scoring', () => {
+
+  async function getScore(
+    severity: 'low' | 'medium' | 'high' | 'critical'
+  ): Promise<number> {
+    const context = makeAmountAnomalyContext(null, 100, severity);
+    // $400 triggers at 4x average of $100 with multiplier 3.0
+    const result = await evaluateAmountAnomaly(
+      makeAmountAnomalyTransaction(400),
+      defaultAmountParams,
+      context
+    );
+    return result.score;
+  }
+
+  test('returns 30 for critical severity', async () => {
+    expect(await getScore('critical')).toBe(30);
+  });
+
+  test('returns 25 for high severity', async () => {
+    expect(await getScore('high')).toBe(25);
+  });
+
+  test('returns 20 for medium severity', async () => {
+    expect(await getScore('medium')).toBe(20);
+  });
+
+  test('returns 15 for low severity', async () => {
+    expect(await getScore('low')).toBe(15);
+  });
+});
+
+// ─────────────────────────────────────────
+// Details object
+// ─────────────────────────────────────────
+describe('amount_anomaly rule — details object', () => {
+
+  test('includes all required fields when triggered', async () => {
+    const context = makeAmountAnomalyContext(null, 100);
+    const result = await evaluateAmountAnomaly(
+      makeAmountAnomalyTransaction(400),
+      defaultAmountParams,
+      context
+    );
+
+    expect(result.details).toMatchObject({
+      rule_type: 'amount_anomaly',
+      transaction_amount: 400,
+      account_avg: 100,
+      multiplier: 3.0,
+      threshold_amount: 300,
+      ratio: 4,
+      message: expect.stringContaining('4.0x'),
+    });
+  });
+
+  test('includes all required fields when not triggered', async () => {
+    const context = makeAmountAnomalyContext(null, 100);
+    const result = await evaluateAmountAnomaly(
+      makeAmountAnomalyTransaction(200), // below threshold of $300
+      defaultAmountParams,
+      context
+    );
+
+    expect(result.details).toMatchObject({
+      rule_type: 'amount_anomaly',
+      transaction_amount: 200,
+      account_avg: 100,
+      threshold_amount: 300,
+      message: null,
+    });
+  });
+
+  test('message contains amount, ratio, average, and threshold', async () => {
+    const context = makeAmountAnomalyContext('50', null);
+    const result = await evaluateAmountAnomaly(
+      makeAmountAnomalyTransaction(200), // 4x the $50 average
+      defaultAmountParams,
+      context
+    );
+
+    expect(result.details.message).toContain('$200');
+    expect(result.details.message).toContain('4.0x');
+    expect(result.details.message).toContain('$50.00');
+    expect(result.details.message).toContain('$150.00'); // threshold = 50 * 3
+  });
+});

@@ -13,7 +13,7 @@
 // and the cache miss cost (one slow query) happens rarely.
 
 import { z } from 'zod';
-import { RuleEvaluator, RuleResult, TransactionData, RuleContext } from './types';
+import { TransactionData, RuleContext, RuleResult, severityToScore } from './types';
 
 export const parameterSchema = z.object({
   multiplier: z.number().min(1.5).max(20),
@@ -73,9 +73,7 @@ export async function evaluate(
   // Score scales with how extreme the anomaly is
   // 3x average = lower score than 10x average
   const ratio = transaction.amount / accountAverage;
-  const score = triggered
-    ? Math.min(20 + Math.floor((ratio - multiplier) * 3), 30)
-    : 0;
+  const score = triggered ? severityToScore(context.severity) : 0;
 
   return {
     triggered,

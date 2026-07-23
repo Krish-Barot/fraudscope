@@ -15,26 +15,29 @@
 // This is safe because rules are independent — they don't share state
 // with each other (each rule uses its own Redis keys).
 
-import { db } from '../config/database';
-import { redisClient } from '../config/redis';
-import { DbRule, TransactionData, RuleResult } from './rules/types';
+import { db } from "../config/database";
+import { redisClient } from "../config/redis";
+import { DbRule, TransactionData, RuleResult } from "./rules/types";
 
 // Import all rule evaluators
 // Each module exports { evaluate, parameterSchema }
-import * as velocityRule from './rules/velocity';
-import * as amountAnomalyRule from './rules/amountAnomaly';
-import * as geoMismatchRule from './rules/geoMismatch';
-import * as timeAnomalyRule from './rules/timeAnomaly';
-import * as roundAmountRule from './rules/roundAmount';
+import * as velocityRule from "./rules/velocity";
+import * as amountAnomalyRule from "./rules/amountAnomaly";
+import * as geoMismatchRule from "./rules/geoMismatch";
+import * as timeAnomalyRule from "./rules/timeAnomaly";
+import * as roundAmountRule from "./rules/roundAmount";
 
 // Map rule type strings (stored in DB) to their implementation modules
 // When you add a new rule type, add it here
-const RULE_REGISTRY: Record<string, { evaluate: Function; parameterSchema: any }> = {
-  velocity:       velocityRule,
+const RULE_REGISTRY: Record<
+  string,
+  { evaluate: Function; parameterSchema: any }
+> = {
+  velocity: velocityRule,
   amount_anomaly: amountAnomalyRule,
-  geo_mismatch:   geoMismatchRule,
-  time_anomaly:   timeAnomalyRule,
-  round_amount:   roundAmountRule,
+  geo_mismatch: geoMismatchRule,
+  time_anomaly: timeAnomalyRule,
+  round_amount: roundAmountRule,
 };
 
 // ─────────────────────────────────────────
@@ -49,25 +52,28 @@ async function getActiveRules(): Promise<DbRule[]> {
   const now = Date.now();
 
   // Return cached rules if still fresh
-  if (cachedRules.length > 0 && (now - cacheLastRefreshed) < CACHE_TTL_MS) {
+  if (cachedRules.length > 0 && now - cacheLastRefreshed < CACHE_TTL_MS) {
     return cachedRules;
   }
 
   // Cache stale or empty — reload from PostgreSQL
-  const rules = await db('rules')
-    .where('is_active', true)
-    .select('id', 'name', 'type', 'parameters', 'severity', 'score_weight');
+  const rules = await db("rules")
+    .where("is_active", true)
+    .select("id", "name", "type", "parameters", "severity", "score_weight");
 
   cachedRules = rules.map((rule: any) => ({
     ...rule,
     // parameters is stored as JSONB — knex may return it as object or string
-    parameters: typeof rule.parameters === 'string'
-      ? JSON.parse(rule.parameters)
-      : rule.parameters,
+    parameters:
+      typeof rule.parameters === "string"
+        ? JSON.parse(rule.parameters)
+        : rule.parameters,
   }));
 
   cacheLastRefreshed = now;
-  console.log(`✅ Rule cache refreshed — ${cachedRules.length} active rules loaded`);
+  console.log(
+    `✅ Rule cache refreshed — ${cachedRules.length} active rules loaded`,
+  );
 
   return cachedRules;
 }
@@ -76,18 +82,18 @@ async function getActiveRules(): Promise<DbRule[]> {
 // (we'll wire this up in FS-17 rules API)
 export function invalidateRuleCache(): void {
   cacheLastRefreshed = 0;
-  console.log('Rule cache invalidated — will reload on next transaction');
+  console.log("Rule cache invalidated — will reload on next transaction");
 }
 
 // ─────────────────────────────────────────
 // Score to severity mapping
 // ─────────────────────────────────────────
 export function scoreToSeverity(score: number): string | null {
-  if (score < 20)  return null;
-  if (score < 40)  return 'low';
-  if (score < 60)  return 'medium';
-  if (score < 80)  return 'high';
-  return 'critical';
+  if (score < 20) return null;
+  if (score < 40) return "low";
+  if (score < 60) return "medium";
+  if (score < 80) return "high";
+  return "critical";
 }
 
 // ─────────────────────────────────────────
@@ -111,7 +117,9 @@ export interface ScorerResult {
 // Main evaluate function
 // Called by the worker for every transaction
 // ─────────────────────────────────────────
-export async function evaluate(transaction: TransactionData): Promise<ScorerResult> {
+export async function evaluate(
+  transaction: TransactionData,
+): Promise<ScorerResult> {
   const rules = await getActiveRules();
 
   if (rules.length === 0) {
@@ -138,7 +146,11 @@ export async function evaluate(transaction: TransactionData): Promise<ScorerResu
       const result: RuleResult = await ruleModule.evaluate(
         transaction,
         rule.parameters,
-        context
+        {
+          redis: redisClient,
+          db,
+          severity: rule.severity,
+        },
       );
 
       if (result.triggered) {
@@ -150,20 +162,19 @@ export async function evaluate(transaction: TransactionData): Promise<ScorerResu
           // score_weight=25 means this rule contributes up to 25 points
           // score_weight=15 means a lower-priority rule
           scoreContribution: Math.round(
-            (result.score / 25) * rule.score_weight
+            (result.score / 25) * rule.score_weight,
           ),
           details: result.details,
         } as TriggeredRule;
       }
 
       return null; // rule didn't trigger
-
     } catch (error) {
       // One rule failing should never stop other rules from running
       // Log the error and continue — better to miss one rule than crash
       console.error(
         `Rule '${rule.name}' (${rule.type}) threw an error:`,
-        (error as Error).message
+        (error as Error).message,
       );
       return null;
     }
@@ -173,14 +184,12 @@ export async function evaluate(transaction: TransactionData): Promise<ScorerResu
   const results = await Promise.all(rulePromises);
 
   // Filter out null results (rules that didn't trigger or failed)
-  const triggeredRules = results.filter(
-    (r): r is TriggeredRule => r !== null
-  );
+  const triggeredRules = results.filter((r): r is TriggeredRule => r !== null);
 
   // Sum all score contributions, cap at 100
   const rawScore = triggeredRules.reduce(
     (sum, rule) => sum + rule.scoreContribution,
-    0
+    0,
   );
   const score = Math.min(rawScore, 100);
   const severity = scoreToSeverity(score);

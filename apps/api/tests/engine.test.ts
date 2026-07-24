@@ -1055,3 +1055,379 @@ describe('geo_mismatch rule — details object', () => {
     expect(result.details.message).toContain('JP');
   });
 });
+
+// ─────────────────────────────────────────
+// Time Anomaly Rule Tests
+// ─────────────────────────────────────────
+
+import {
+  evaluate as evaluateTimeAnomaly,
+  parameterSchema as timeAnomalySchema,
+  isHourInWindow,
+} from '../src/engine/rules/timeAnomaly';
+
+// ─────────────────────────────────────────
+// Helper: build a transaction with a specific UTC time
+// We control the UTC time and let the rule convert it to local timezone
+// ─────────────────────────────────────────
+function makeTimeTransaction(utcISOString: string): TransactionData {
+  return {
+    id: 'test-time-tx-id',
+    external_id: 'TEST-TIME-001',
+    account_id: 'ACC-TIME-01',
+    amount: 150.00,
+    currency: 'CAD',
+    country_code: 'CA',
+    channel: 'online',
+    created_at: utcISOString,
+  };
+}
+
+// Toronto is UTC-4 in summer (EDT) and UTC-5 in winter (EST)
+// We use a summer date for predictable UTC-4 offset
+// 3 AM Toronto EDT = 7 AM UTC → UTC ISO: 2026-07-15T07:00:00.000Z
+// 2 PM Toronto EDT = 6 PM UTC → UTC ISO: 2026-07-15T18:00:00.000Z
+const TORONTO_3AM_UTC  = '2026-07-15T07:00:00.000Z';  // 3 AM Toronto
+const TORONTO_2PM_UTC  = '2026-07-15T18:00:00.000Z';  // 2 PM Toronto
+const TORONTO_2AM_UTC  = '2026-07-15T06:00:00.000Z';  // 2 AM Toronto
+const TORONTO_5AM_UTC  = '2026-07-15T09:00:00.000Z';  // 5 AM Toronto
+const TORONTO_10PM_UTC = '2026-07-15T02:00:00.000Z';  // 10 PM Toronto
+const TORONTO_MIDNIGHT = '2026-07-15T04:00:00.000Z';  // 12 AM (midnight) Toronto
+
+const defaultTimeParams = {
+  suspicious_start_hour: 2,   // 2 AM
+  suspicious_end_hour: 5,     // 5 AM
+  timezone: 'America/Toronto',
+};
+
+// context is unused by time anomaly rule but required by interface
+const timeContext: RuleContext = {
+  redis: {} as any,
+  db: {} as any,
+  severity: 'low',
+};
+
+// ─────────────────────────────────────────
+// isHourInWindow helper tests
+// Testing this separately makes it easier to cover all edge cases
+// ─────────────────────────────────────────
+describe('time_anomaly — isHourInWindow helper', () => {
+
+  describe('normal window (start < end)', () => {
+    test('triggers when hour is within window', () => {
+      expect(isHourInWindow(3, 2, 5)).toBe(true);   // 3 AM, window 2-5
+      expect(isHourInWindow(2, 2, 5)).toBe(true);   // exactly at start
+      expect(isHourInWindow(4, 2, 5)).toBe(true);   // just before end
+    });
+
+    test('does not trigger when hour is outside window', () => {
+      expect(isHourInWindow(5, 2, 5)).toBe(false);  // exactly at end (exclusive)
+      expect(isHourInWindow(1, 2, 5)).toBe(false);  // before window
+      expect(isHourInWindow(6, 2, 5)).toBe(false);  // after window
+      expect(isHourInWindow(14, 2, 5)).toBe(false); // midday
+    });
+  });
+
+  describe('midnight-crossing window (start > end)', () => {
+    test('triggers when hour is in the late night portion', () => {
+      expect(isHourInWindow(22, 22, 4)).toBe(true);  // exactly at start
+      expect(isHourInWindow(23, 22, 4)).toBe(true);  // 11 PM
+    });
+
+    test('triggers when hour is in the early morning portion', () => {
+      expect(isHourInWindow(0, 22, 4)).toBe(true);   // midnight
+      expect(isHourInWindow(1, 22, 4)).toBe(true);   // 1 AM
+      expect(isHourInWindow(3, 22, 4)).toBe(true);   // 3 AM
+    });
+
+    test('does not trigger for hours in the middle of the day', () => {
+      expect(isHourInWindow(4, 22, 4)).toBe(false);  // exactly at end (exclusive)
+      expect(isHourInWindow(12, 22, 4)).toBe(false); // noon
+      expect(isHourInWindow(21, 22, 4)).toBe(false); // just before start
+    });
+  });
+
+  describe('edge cases', () => {
+    test('zero-width window never triggers (start === end)', () => {
+      expect(isHourInWindow(14, 14, 14)).toBe(false);
+      expect(isHourInWindow(0, 0, 0)).toBe(false);
+    });
+
+    test('boundary conditions are correct (end is exclusive)', () => {
+      // end hour is exclusive — hour=end should NOT trigger
+      expect(isHourInWindow(5, 2, 5)).toBe(false);
+      expect(isHourInWindow(4, 2, 5)).toBe(true);
+    });
+  });
+});
+
+// ─────────────────────────────────────────
+// Core evaluate() function tests
+// ─────────────────────────────────────────
+describe('time_anomaly rule — trigger logic', () => {
+
+  // FS-14 required test 1: triggers at 3 AM Toronto time
+  test('triggers when transaction is at 3 AM Toronto time', async () => {
+    const transaction = makeTimeTransaction(TORONTO_3AM_UTC);
+    const result = await evaluateTimeAnomaly(
+      transaction,
+      defaultTimeParams,
+      timeContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.score).toBe(15);
+    expect(result.details.transaction_hour).toBe(3);
+    expect(result.details.transaction_local_time).toBe('03:00');
+    expect(result.details.message).toContain('03:00');
+  });
+
+  // FS-14 required test 2: does NOT trigger at 2 PM Toronto time
+  test('does NOT trigger when transaction is at 2 PM Toronto time', async () => {
+    const transaction = makeTimeTransaction(TORONTO_2PM_UTC);
+    const result = await evaluateTimeAnomaly(
+      transaction,
+      defaultTimeParams,
+      timeContext
+    );
+
+    expect(result.triggered).toBe(false);
+    expect(result.score).toBe(0);
+    expect(result.details.transaction_hour).toBe(14);
+    expect(result.details.message).toBeNull();
+  });
+
+  test('triggers at exactly 2 AM (start of window)', async () => {
+    const transaction = makeTimeTransaction(TORONTO_2AM_UTC);
+    const result = await evaluateTimeAnomaly(
+      transaction,
+      defaultTimeParams,
+      timeContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.details.transaction_hour).toBe(2);
+  });
+
+  test('does NOT trigger at exactly 5 AM (end is exclusive)', async () => {
+    const transaction = makeTimeTransaction(TORONTO_5AM_UTC);
+    const result = await evaluateTimeAnomaly(
+      transaction,
+      defaultTimeParams,
+      timeContext
+    );
+
+    expect(result.triggered).toBe(false);
+    expect(result.details.transaction_hour).toBe(5);
+  });
+
+  test('handles midnight-crossing window correctly', async () => {
+    // Window: 22:00 to 04:00 (crosses midnight)
+    const midnightCrossingParams = {
+      suspicious_start_hour: 22,
+      suspicious_end_hour: 4,
+      timezone: 'America/Toronto',
+    };
+
+    // 10 PM should trigger
+    const result10PM = await evaluateTimeAnomaly(
+      makeTimeTransaction(TORONTO_10PM_UTC),
+      midnightCrossingParams,
+      timeContext
+    );
+    expect(result10PM.triggered).toBe(true);
+    expect(result10PM.details.transaction_hour).toBe(22);
+
+    // Midnight should trigger
+    const resultMidnight = await evaluateTimeAnomaly(
+      makeTimeTransaction(TORONTO_MIDNIGHT),
+      midnightCrossingParams,
+      timeContext
+    );
+    expect(resultMidnight.triggered).toBe(true);
+    expect(resultMidnight.details.transaction_hour).toBe(0);
+
+    // 2 PM should NOT trigger
+    const result2PM = await evaluateTimeAnomaly(
+      makeTimeTransaction(TORONTO_2PM_UTC),
+      midnightCrossingParams,
+      timeContext
+    );
+    expect(result2PM.triggered).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────
+// Score
+// ─────────────────────────────────────────
+describe('time_anomaly rule — score', () => {
+
+  test('always returns 15 when triggered regardless of context severity', async () => {
+    // Time anomaly is a fixed 15 — not affected by rule severity
+    const severities: Array<'low' | 'medium' | 'high' | 'critical'> = [
+      'low', 'medium', 'high', 'critical'
+    ];
+
+    for (const severity of severities) {
+      const ctx = { ...timeContext, severity };
+      const result = await evaluateTimeAnomaly(
+        makeTimeTransaction(TORONTO_3AM_UTC),
+        defaultTimeParams,
+        ctx
+      );
+      expect(result.score).toBe(15);
+    }
+  });
+
+  test('always returns 0 when not triggered', async () => {
+    const result = await evaluateTimeAnomaly(
+      makeTimeTransaction(TORONTO_2PM_UTC),
+      defaultTimeParams,
+      timeContext
+    );
+    expect(result.score).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────
+// Parameter schema
+// ─────────────────────────────────────────
+describe('time_anomaly rule — parameterSchema', () => {
+
+  test('accepts valid parameters', () => {
+    expect(() =>
+      timeAnomalySchema.parse({
+        suspicious_start_hour: 2,
+        suspicious_end_hour: 5,
+        timezone: 'America/Toronto',
+      })
+    ).not.toThrow();
+  });
+
+  test('uses America/Toronto as default timezone', () => {
+    const result = timeAnomalySchema.parse({
+      suspicious_start_hour: 2,
+      suspicious_end_hour: 5,
+    });
+    expect(result.timezone).toBe('America/Toronto');
+  });
+
+  test('rejects hour below 0', () => {
+    expect(() =>
+      timeAnomalySchema.parse({
+        suspicious_start_hour: -1,
+        suspicious_end_hour: 5,
+        timezone: 'America/Toronto',
+      })
+    ).toThrow();
+  });
+
+  test('rejects hour above 23', () => {
+    expect(() =>
+      timeAnomalySchema.parse({
+        suspicious_start_hour: 2,
+        suspicious_end_hour: 24,
+        timezone: 'America/Toronto',
+      })
+    ).toThrow();
+  });
+
+  test('rejects non-integer hours', () => {
+    expect(() =>
+      timeAnomalySchema.parse({
+        suspicious_start_hour: 2.5,
+        suspicious_end_hour: 5,
+        timezone: 'America/Toronto',
+      })
+    ).toThrow();
+  });
+
+  test('accepts midnight-crossing windows (start > end)', () => {
+    expect(() =>
+      timeAnomalySchema.parse({
+        suspicious_start_hour: 22,
+        suspicious_end_hour: 4,
+        timezone: 'America/Toronto',
+      })
+    ).not.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────
+// Details object
+// ─────────────────────────────────────────
+describe('time_anomaly rule — details object', () => {
+
+  test('includes all required fields when triggered', async () => {
+    const result = await evaluateTimeAnomaly(
+      makeTimeTransaction(TORONTO_3AM_UTC),
+      defaultTimeParams,
+      timeContext
+    );
+
+    expect(result.details).toMatchObject({
+      rule_type: 'time_anomaly',
+      transaction_hour: 3,
+      transaction_local_time: '03:00',
+      suspicious_window: '02:00 - 05:00',
+      timezone: 'America/Toronto',
+      crosses_midnight: false,
+      message: expect.stringContaining('03:00'),
+    });
+  });
+
+  test('includes all required fields when not triggered', async () => {
+    const result = await evaluateTimeAnomaly(
+      makeTimeTransaction(TORONTO_2PM_UTC),
+      defaultTimeParams,
+      timeContext
+    );
+
+    expect(result.details).toMatchObject({
+      rule_type: 'time_anomaly',
+      transaction_hour: 14,
+      transaction_local_time: '14:00',
+      suspicious_window: '02:00 - 05:00',
+      timezone: 'America/Toronto',
+      crosses_midnight: false,
+      message: null,
+    });
+  });
+
+  test('marks crosses_midnight true for midnight-crossing windows', async () => {
+    const result = await evaluateTimeAnomaly(
+      makeTimeTransaction(TORONTO_10PM_UTC),
+      { suspicious_start_hour: 22, suspicious_end_hour: 4, timezone: 'America/Toronto' },
+      timeContext
+    );
+
+    expect(result.details.crosses_midnight).toBe(true);
+    expect(result.details.suspicious_window).toBe('22:00 - 04:00');
+  });
+
+  test('message includes timezone and window', async () => {
+    const result = await evaluateTimeAnomaly(
+      makeTimeTransaction(TORONTO_3AM_UTC),
+      defaultTimeParams,
+      timeContext
+    );
+
+    expect(result.details.message).toContain('America/Toronto');
+    expect(result.details.message).toContain('02:00 - 05:00');
+  });
+
+  test('handles invalid timezone gracefully', async () => {
+    const result = await evaluateTimeAnomaly(
+      makeTimeTransaction(TORONTO_3AM_UTC),
+      {
+        suspicious_start_hour: 2,
+        suspicious_end_hour: 5,
+        timezone: 'Invalid/Timezone',
+      },
+      timeContext
+    );
+
+    expect(result.triggered).toBe(false);
+    expect(result.details.skipped).toBe('invalid_timezone');
+  });
+});

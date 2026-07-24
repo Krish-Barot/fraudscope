@@ -1,77 +1,183 @@
 // apps/api/src/engine/rules/timeAnomaly.ts
-// Time anomaly — flags transactions during unusual hours
+// Time anomaly — flags transactions made during unusual hours
 //
-// Most legitimate purchases happen during waking hours.
-// Fraudsters often run automated scripts at night when the
-// cardholder is asleep and less likely to notice the charge.
+// WHY THIS CATCHES FRAUD:
+// Fraudsters running automated scripts often do so at night when:
+//   1. The cardholder is asleep and won't notice the charge
+//   2. Bank fraud teams have reduced staffing
+//   3. Automated scripts run on timers regardless of local time
+// Most legitimate cardholders make purchases during waking hours (6 AM - 11 PM).
 //
-// Note: We check the hour in the configured timezone.
-// A 3 AM transaction in Toronto is suspicious.
-// The same UTC timestamp might be 8 AM somewhere else — not suspicious.
+// WHY date-fns-tz NOT Intl.DateTimeFormat:
+// Intl.DateTimeFormat converts a date to a locale string and we'd have to
+// parse the hour back out of that string — fragile across environments.
+// date-fns-tz gives us toZonedTime() which returns a proper Date object
+// adjusted for the timezone. We call getHours() on it directly — clean, reliable.
+//
+// MIDNIGHT WRAP HANDLING:
+// A suspicious window can cross midnight: e.g. 22:00 to 04:00
+// This requires different logic than a normal window (02:00 to 05:00):
+//
+// Normal window (start < end):
+//   Triggered when: hour >= start AND hour < end
+//   Example: window 02:00-05:00, hour=03 → 03 >= 02 AND 03 < 05 → TRIGGERED
+//
+// Midnight-crossing window (start > end):
+//   Triggered when: hour >= start OR hour < end
+//   Example: window 22:00-04:00, hour=23 → 23 >= 22 → TRIGGERED
+//   Example: window 22:00-04:00, hour=02 → 02 < 04 → TRIGGERED
+//   Example: window 22:00-04:00, hour=12 → 12 >= 22? No. 12 < 04? No → NOT triggered
+//
+// SCORE IS FIXED AT 15:
+// This differs from other rules which use severityToScore().
+// Time anomaly is intentionally a low score — it's a compounding signal,
+// not a standalone fraud indicator. A 3 AM transaction from Nigeria with
+// velocity violations will compound to a high score. A 3 AM transaction
+// from the account's home country might be a night shift worker.
+//
+// NO REDIS OR DB NEEDED:
+// This rule is purely computational — it only looks at the transaction's
+// timestamp. No external state required. The context parameter is accepted
+// for interface consistency but marked as unused (_context).
 
 import { z } from "zod";
-import {
-  RuleResult,
-  TransactionData,
-  RuleContext,
-  severityToScore,
-} from "./types";
+import { toZonedTime } from "date-fns-tz";
+import { TransactionData, RuleContext, RuleResult } from "./types";
+
+// Fixed score — does not vary with severity
+// See "SCORE IS FIXED AT 15" note above
+const TIME_ANOMALY_SCORE = 15;
 
 export const parameterSchema = z.object({
-  suspicious_start_hour: z.number().int().min(0).max(23),
-  suspicious_end_hour: z.number().int().min(0).max(23),
-  timezone: z.string().default("America/Toronto"),
+  suspicious_start_hour: z
+    .number()
+    .int("suspicious_start_hour must be an integer")
+    .min(0, "suspicious_start_hour must be 0-23")
+    .max(23, "suspicious_start_hour must be 0-23"),
+
+  suspicious_end_hour: z
+    .number()
+    .int("suspicious_end_hour must be an integer")
+    .min(0, "suspicious_end_hour must be 0-23")
+    .max(23, "suspicious_end_hour must be 0-23"),
+
+  // IANA timezone string e.g. 'America/Toronto', 'Europe/London', 'Asia/Tokyo'
+  // date-fns-tz validates this at runtime when toZonedTime() is called
+  timezone: z
+    .string()
+    .min(1, "timezone cannot be empty")
+    .default("America/Toronto"),
 });
+
+export type TimeAnomalyParameters = z.infer<typeof parameterSchema>;
+
+// ─────────────────────────────────────────
+// Helper: determine if an hour falls within a suspicious window
+// Extracted as a separate function so it can be unit tested independently
+// ─────────────────────────────────────────
+export function isHourInWindow(
+  hour: number,
+  startHour: number,
+  endHour: number,
+): boolean {
+  if (startHour === endHour) {
+    // Window of zero width — nothing matches
+    // Avoids ambiguity of "is 14:00 in the window 14:00-14:00?"
+    return false;
+  }
+
+  if (startHour < endHour) {
+    // Normal window — does not cross midnight
+    // e.g. 02:00 to 05:00: triggered for hours 2, 3, 4
+    return hour >= startHour && hour < endHour;
+  } else {
+    // Midnight-crossing window
+    // e.g. 22:00 to 04:00: triggered for hours 22, 23, 0, 1, 2, 3
+    return hour >= startHour || hour < endHour;
+  }
+}
 
 export async function evaluate(
   transaction: TransactionData,
   parameters: Record<string, unknown>,
-  context: RuleContext,
+  _context: RuleContext, // underscore: intentionally unused
 ): Promise<RuleResult> {
   const params = parameterSchema.parse(parameters);
   const { suspicious_start_hour, suspicious_end_hour, timezone } = params;
 
-  const txDate = new Date(transaction.created_at);
+  // ── Convert timestamp to local timezone ───────────────────────
+  // transaction.created_at is a UTC ISO string: "2026-07-15T03:23:11.000Z"
+  // toZonedTime() returns a Date object where getHours() gives local time
+  //
+  // Example:
+  //   UTC:     2026-07-15T07:23:11.000Z
+  //   Toronto: 2026-07-15T03:23:11 (EDT, UTC-4)
+  //   getHours() → 3
 
-  // Intl.DateTimeFormat gives us the local time in any timezone
-  // without needing a heavy library like moment.js
-  const localHour = parseInt(
-    new Intl.DateTimeFormat("en-US", {
-      hour: "numeric",
-      hour12: false,
-      timeZone: timezone,
-    }).format(txDate),
-    10,
+  let localDate: Date;
+  try {
+    const utcDate = new Date(transaction.created_at);
+
+    // Validate timezone by attempting to format with it
+    // Intl.DateTimeFormat throws a RangeError for invalid timezones
+    // date-fns-tz itself does not throw — it silently falls back to UTC
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+
+    localDate = toZonedTime(utcDate, timezone);
+  } catch (err) {
+    console.warn(
+      `time_anomaly: invalid timezone '${timezone}' — skipping rule`,
+      (err as Error).message,
+    );
+    return {
+      triggered: false,
+      score: 0,
+      details: {
+        rule_type: "time_anomaly",
+        skipped: "invalid_timezone",
+        timezone,
+      },
+    };
+  }
+
+  const localHour = localDate.getHours(); // 0-23
+
+  // Format local time as HH:MM for the details object
+  // e.g. "03:23"
+  const localTimeFormatted = [
+    String(localDate.getHours()).padStart(2, "0"),
+    String(localDate.getMinutes()).padStart(2, "0"),
+  ].join(":");
+
+  // ── Check if the hour falls in the suspicious window ─────────
+  const triggered = isHourInWindow(
+    localHour,
+    suspicious_start_hour,
+    suspicious_end_hour,
   );
 
-  // Handle window that crosses midnight (e.g. 22:00 to 04:00)
-  let triggered: boolean;
-  if (suspicious_start_hour <= suspicious_end_hour) {
-    // Normal window: e.g. 02:00 to 05:00
-    triggered =
-      localHour >= suspicious_start_hour && localHour < suspicious_end_hour;
-  } else {
-    // Midnight-crossing window: e.g. 22:00 to 04:00
-    triggered =
-      localHour >= suspicious_start_hour || localHour < suspicious_end_hour;
-  }
+  // Format the window for display: "02:00 - 05:00"
+  const windowFormatted =
+    `${String(suspicious_start_hour).padStart(2, "0")}:00` +
+    ` - ` +
+    `${String(suspicious_end_hour).padStart(2, "0")}:00`;
+
+  // Determine window type for the message
+  const crossesMidnight = suspicious_start_hour > suspicious_end_hour;
 
   return {
     triggered,
-    score: triggered ? severityToScore(context.severity) : 0,
+    // Fixed score of 15 — see note at top of file
+    score: triggered ? TIME_ANOMALY_SCORE : 0,
     details: {
       rule_type: "time_anomaly",
       transaction_hour: localHour,
-      suspicious_window: `${suspicious_start_hour}:00 - ${suspicious_end_hour}:00`,
+      transaction_local_time: localTimeFormatted,
+      suspicious_window: windowFormatted,
       timezone,
-      transaction_local_time: new Intl.DateTimeFormat("en-CA", {
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: timezone,
-        hour12: false,
-      }).format(txDate),
+      crosses_midnight: crossesMidnight,
       message: triggered
-        ? `Transaction at ${localHour}:00 local time (${timezone}) — suspicious window: ${suspicious_start_hour}:00-${suspicious_end_hour}:00`
+        ? `Transaction at ${localTimeFormatted} local time (${timezone}) falls in suspicious window ${windowFormatted}`
         : null,
     },
   };

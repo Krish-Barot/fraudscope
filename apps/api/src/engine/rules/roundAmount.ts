@@ -1,75 +1,152 @@
 // apps/api/src/engine/rules/roundAmount.ts
-// Round amount — flags suspiciously round amounts above a threshold
+// Round amount — flags suspiciously round transaction amounts
 //
-// Real purchases have specific prices: $47.83, $129.99, $23.50
-// Fraudsters testing stolen cards often use round amounts: $1,000, $5,000
-// because they're entering amounts manually or using automated scripts
-// that default to round numbers.
+// WHY THIS CATCHES FRAUD:
+// Real purchases have messy prices: $47.83, $129.99, $23.50
+// Fraudsters doing manual transfers or running scripts default to
+// round numbers: $1,000, $5,000, $10,000.
 //
-// Also catches "structuring" — a fraud pattern where criminals make
-// transactions just under reporting thresholds ($9,999 instead of $10,000)
-// Those aren't perfectly round but are still suspicious at high amounts.
+// STRUCTURING / THRESHOLD AVOIDANCE:
+// Many jurisdictions require banks to report transactions above certain
+// thresholds (e.g. $10,000 in Canada/US). Criminals deliberately stay
+// just below these thresholds. A round $9,000 or $9,500 is suspicious.
+// The tolerance parameter catches near-round amounts for this reason.
+//
+// AMOUNT-TIERED SCORING:
+// Unlike other rules that use severityToScore(), this rule uses fixed
+// tiers based on the transaction amount itself:
+//   $1,000-$4,999  → score 15  (suspicious but common)
+//   $5,000-$9,999  → score 20  (more suspicious, approaching thresholds)
+//   $10,000+       → score 25  (common reporting threshold target)
+//
+// The tier boundaries are not arbitrary — $10,000 is the FINTRAC
+// (Canada) and FinCEN (US) large cash transaction reporting threshold.
+//
+// TOLERANCE PARAMETER:
+// tolerance=0: only exact multiples of 100 ($1000, $2000, $5000)
+// tolerance=1: also catches near-round ($999, $1001, $4999, $5001)
+// The tolerance applies to BOTH sides of the round number:
+//   amount % 100 <= tolerance          (just above: $5,001)
+//   amount % 100 >= (100 - tolerance)  (just below: $4,999)
+//
+// NEAREST ROUND CALCULATION:
+// We include the nearest round number in the details so the alert
+// shows analysts: "$4,999 — suspiciously close to $5,000"
 
-import { z } from "zod";
-import {
-  RuleResult,
-  TransactionData,
-  RuleContext,
-  severityToScore,
-} from "./types";
+import { z } from 'zod';
+import { TransactionData, RuleContext, RuleResult } from './types';
 
 export const parameterSchema = z.object({
-  min_amount: z.number().min(0),
-  tolerance: z.number().min(0).max(10).default(0),
+  min_amount: z
+    .number()
+    .min(0, 'min_amount cannot be negative'),
+
+  tolerance: z
+    .number()
+    .min(0, 'tolerance cannot be negative')
+    .max(5, 'tolerance must be at most 5')
+    .default(0),
 });
+
+export type RoundAmountParameters = z.infer<typeof parameterSchema>;
+
+// ─────────────────────────────────────────
+// Calculate the nearest round number (multiple of 100)
+// Used in the details object for analyst context
+// ─────────────────────────────────────────
+export function nearestRound(amount: number): number {
+  return Math.round(amount / 100) * 100;
+}
+
+// ─────────────────────────────────────────
+// Determine if an amount is "round" within tolerance
+// Returns true if:
+//   - amount is exactly divisible by 100 (within tolerance above)
+//   - amount is within tolerance below the next multiple of 100
+// ─────────────────────────────────────────
+export function isRoundAmount(amount: number, tolerance: number): boolean {
+  // Use toFixed(2) to avoid floating point issues
+  // e.g. 5000.1 % 100 might return 0.09999... instead of 0.1
+  const remainder = parseFloat((amount % 100).toFixed(2));
+
+  // Just above a round number: $5,001 with tolerance=1 → remainder=1 → 1<=1 ✓
+  const justAbove = remainder <= tolerance;
+
+  // Just below a round number: $4,999 with tolerance=1 → remainder=99 → 99>=(100-1) ✓
+  const justBelow = remainder >= (100 - tolerance);
+
+  return justAbove || justBelow;
+}
+
+// ─────────────────────────────────────────
+// Determine score tier based on amount
+// Higher amounts → higher scores
+// ─────────────────────────────────────────
+export function getAmountScore(amount: number): number {
+  if (amount >= 10000) return 25;  // $10,000+ — reporting threshold territory
+  if (amount >= 5000)  return 20;  // $5,000-$9,999 — approaching threshold
+  return 15;                        // $1,000-$4,999 — suspicious but lower risk
+}
 
 export async function evaluate(
   transaction: TransactionData,
   parameters: Record<string, unknown>,
-  context: RuleContext,
+  _context: RuleContext  // unused — purely computational rule
 ): Promise<RuleResult> {
   const params = parameterSchema.parse(parameters);
   const { min_amount, tolerance } = params;
 
+  // ── Early exit: skip transactions below min_amount ────────────
   if (transaction.amount < min_amount) {
     return {
       triggered: false,
       score: 0,
-      details: { rule_type: "round_amount", skipped: "below_min_amount" },
+      details: {
+        rule_type: 'round_amount',
+        skipped: 'below_min_amount',
+        amount: transaction.amount,
+        min_amount,
+      },
     };
   }
 
-  // Check if amount is "round" within the tolerance
-  // tolerance=0: only exact multiples of 100 ($1000, $2000, $5000)
-  // tolerance=1: also catches near-round ($999, $1001)
-  const remainder = transaction.amount % 100;
-  const isRound = remainder <= tolerance || remainder >= 100 - tolerance;
+  // ── Check if amount is round within tolerance ─────────────────
+  const isRound = isRoundAmount(transaction.amount, tolerance);
 
-  const isExactThousand = transaction.amount % 1000 === 0;
-  const isExactFiveHundred = transaction.amount % 500 === 0;
+  // ── Also check for exact multiples of $500 and $1,000 ─────────
+  // Even if not caught by the 100-tolerance check, exact multiples
+  // of 500 and 1000 are especially suspicious (common structured amounts)
+  const isExactFiveHundred = parseFloat((transaction.amount % 500).toFixed(2)) === 0
+    && transaction.amount >= 500;
+  const isExactThousand = parseFloat((transaction.amount % 1000).toFixed(2)) === 0
+    && transaction.amount >= 1000;
 
-  const triggered = isRound;
+  // Rule triggers if EITHER condition is true
+  const triggered = isRound || isExactFiveHundred;
 
-  // Base score from severity, with bonus for exact thousands
-  let score = 0;
-  if (triggered) {
-    score = severityToScore(context.severity);
-    // Bonus for exact multiples of 1000 — most suspicious pattern
-    if (isExactThousand) score = Math.min(score + 5, 30);
-  }
+  // ── Calculate score tier ──────────────────────────────────────
+  const score = triggered ? getAmountScore(transaction.amount) : 0;
+
+  // ── Calculate nearest round for details ──────────────────────
+  const nearest = nearestRound(transaction.amount);
 
   return {
     triggered,
     score,
     details: {
-      rule_type: "round_amount",
+      rule_type: 'round_amount',
       amount: transaction.amount,
       min_amount,
-      remainder: Math.round(remainder * 100) / 100,
+      tolerance,
+      is_exact_round: parseFloat((transaction.amount % 100).toFixed(2)) === 0,
       is_exact_thousand: isExactThousand,
       is_exact_five_hundred: isExactFiveHundred,
+      nearest_round: nearest,
+      score_tier: triggered
+        ? (transaction.amount >= 10000 ? '$10,000+' : transaction.amount >= 5000 ? '$5,000-$9,999' : '$1,000-$4,999')
+        : null,
       message: triggered
-        ? `Suspicious round amount: $${transaction.amount} (multiple of 100)`
+        ? `Suspicious round amount: $${transaction.amount.toFixed(2)} (nearest round: $${nearest.toFixed(2)})`
         : null,
     },
   };

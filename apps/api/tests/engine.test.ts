@@ -1431,3 +1431,422 @@ describe('time_anomaly rule — details object', () => {
     expect(result.details.skipped).toBe('invalid_timezone');
   });
 });
+
+// ─────────────────────────────────────────
+// Round Amount Rule Tests
+// ─────────────────────────────────────────
+
+import {
+  evaluate as evaluateRoundAmount,
+  parameterSchema as roundAmountSchema,
+  isRoundAmount,
+  nearestRound,
+  getAmountScore,
+} from '../src/engine/rules/roundAmount';
+
+// context is unused by round amount rule but required by interface
+const roundContext: RuleContext = {
+  redis: {} as any,
+  db: {} as any,
+  severity: 'low',
+};
+
+const defaultRoundParams = {
+  min_amount: 1000,
+  tolerance: 0,
+};
+
+function makeRoundTransaction(amount: number): TransactionData {
+  return {
+    id: 'test-round-tx-id',
+    external_id: 'TEST-ROUND-001',
+    account_id: 'ACC-ROUND-01',
+    amount,
+    currency: 'CAD',
+    country_code: 'CA',
+    channel: 'online',
+    created_at: new Date().toISOString(),
+  };
+}
+
+// ─────────────────────────────────────────
+// isRoundAmount helper tests
+// ─────────────────────────────────────────
+describe('round_amount — isRoundAmount helper', () => {
+
+  describe('tolerance = 0 (exact multiples only)', () => {
+    test('returns true for exact multiples of 100', () => {
+      expect(isRoundAmount(1000, 0)).toBe(true);
+      expect(isRoundAmount(2000, 0)).toBe(true);
+      expect(isRoundAmount(5000, 0)).toBe(true);
+      expect(isRoundAmount(10000, 0)).toBe(true);
+      expect(isRoundAmount(1500, 0)).toBe(true);  // $1,500 is exact multiple of 100
+    });
+
+    test('returns false for non-round amounts', () => {
+      expect(isRoundAmount(1234.56, 0)).toBe(false);
+      expect(isRoundAmount(999.99, 0)).toBe(false);
+      expect(isRoundAmount(5000.01, 0)).toBe(false);
+      expect(isRoundAmount(4999.99, 0)).toBe(false);
+    });
+  });
+
+  describe('tolerance = 1', () => {
+    test('returns true for amounts within $1 above a round number', () => {
+      expect(isRoundAmount(5001, 1)).toBe(true);   // $1 above $5,000
+      expect(isRoundAmount(1001, 1)).toBe(true);   // $1 above $1,000
+    });
+
+    test('returns true for amounts within $1 below a round number', () => {
+      expect(isRoundAmount(4999, 1)).toBe(true);   // $1 below $5,000
+      expect(isRoundAmount(999, 1)).toBe(true);    // $1 below $1,000 (but below min_amount handled separately)
+    });
+
+    test('returns false for amounts outside tolerance', () => {
+      expect(isRoundAmount(5002, 1)).toBe(false);  // $2 above $5,000
+      expect(isRoundAmount(4998, 1)).toBe(false);  // $2 below $5,000
+    });
+  });
+
+  describe('tolerance = 5', () => {
+    test('returns true for amounts within $5 of a round number', () => {
+      expect(isRoundAmount(5005, 5)).toBe(true);   // $5 above
+      expect(isRoundAmount(4995, 5)).toBe(true);   // $5 below
+    });
+
+    test('returns false just outside tolerance', () => {
+      expect(isRoundAmount(5006, 5)).toBe(false);  // $6 above
+      expect(isRoundAmount(4994, 5)).toBe(false);  // $6 below
+    });
+  });
+});
+
+// ─────────────────────────────────────────
+// nearestRound helper tests
+// ─────────────────────────────────────────
+describe('round_amount — nearestRound helper', () => {
+  test('returns the amount itself for exact multiples of 100', () => {
+    expect(nearestRound(5000)).toBe(5000);
+    expect(nearestRound(1000)).toBe(1000);
+  });
+
+  test('rounds to nearest 100 for non-exact amounts', () => {
+    expect(nearestRound(4960)).toBe(5000);   // closer to 5000
+    expect(nearestRound(4940)).toBe(4900);   // closer to 4900
+    expect(nearestRound(1234)).toBe(1200);   // closer to 1200
+    expect(nearestRound(4999)).toBe(5000);   // $4,999 rounds to $5,000
+  });
+});
+
+// ─────────────────────────────────────────
+// getAmountScore helper tests
+// ─────────────────────────────────────────
+describe('round_amount — getAmountScore helper', () => {
+  test('returns 15 for amounts in $1,000-$4,999 range', () => {
+    expect(getAmountScore(1000)).toBe(15);
+    expect(getAmountScore(2500)).toBe(15);
+    expect(getAmountScore(4999)).toBe(15);
+  });
+
+  test('returns 20 for amounts in $5,000-$9,999 range', () => {
+    expect(getAmountScore(5000)).toBe(20);
+    expect(getAmountScore(7500)).toBe(20);
+    expect(getAmountScore(9999)).toBe(20);
+  });
+
+  test('returns 25 for amounts $10,000 and above', () => {
+    expect(getAmountScore(10000)).toBe(25);
+    expect(getAmountScore(50000)).toBe(25);
+    expect(getAmountScore(100000)).toBe(25);
+  });
+});
+
+// ─────────────────────────────────────────
+// Core trigger logic — FS-15 required tests
+// ─────────────────────────────────────────
+describe('round_amount rule — trigger logic', () => {
+
+  // FS-15 required test 1: triggers on $5,000.00
+  test('triggers on $5,000.00 (exact round amount above threshold)', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(5000),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.score).toBe(20);           // $5,000 is in $5,000-$9,999 tier
+    expect(result.details.amount).toBe(5000);
+    expect(result.details.is_exact_round).toBe(true);
+    expect(result.details.nearest_round).toBe(5000);
+    expect(result.details.message).toContain('$5000.00');
+  });
+
+  // FS-15 required test 2: does NOT trigger on $1,234.56
+  test('does NOT trigger on $1,234.56 (non-round amount)', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(1234.56),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.triggered).toBe(false);
+    expect(result.score).toBe(0);
+    expect(result.details.message).toBeNull();
+  });
+
+  test('triggers on $10,000.00 with score 25', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(10000),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.score).toBe(25);
+  });
+
+  test('triggers on $1,000.00 with score 15', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(1000),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.score).toBe(15);
+  });
+
+  test('triggers on $2,000.00 (exact multiple of $1,000)', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(2000),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.details.is_exact_thousand).toBe(true);
+  });
+
+  test('triggers on $1,500.00 (exact multiple of $500)', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(1500),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.details.is_exact_five_hundred).toBe(true);
+  });
+
+  test('does NOT trigger when amount is below min_amount', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(500), // below min_amount of 1000
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.triggered).toBe(false);
+    expect(result.details.skipped).toBe('below_min_amount');
+  });
+
+  test('does NOT trigger on non-round amounts regardless of size', async () => {
+    const nonRoundAmounts = [1234.56, 5678.90, 9999.99, 10001.23];
+
+    for (const amount of nonRoundAmounts) {
+      const result = await evaluateRoundAmount(
+        makeRoundTransaction(amount),
+        defaultRoundParams,
+        roundContext
+      );
+      expect(result.triggered).toBe(false);
+    }
+  });
+
+  test('triggers on near-round amount when tolerance > 0', async () => {
+    // $4,999 with tolerance=1 — within $1 of $5,000
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(4999),
+      { min_amount: 1000, tolerance: 1 },
+      roundContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.details.nearest_round).toBe(5000);
+  });
+
+  test('does NOT trigger on near-round amount when tolerance = 0', async () => {
+    // $4,999 with tolerance=0 — $4,999 % 100 = 99, not <= 0
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(4999),
+      defaultRoundParams, // tolerance: 0
+      roundContext
+    );
+
+    // $4,999 is NOT a multiple of 100, not a multiple of 500
+    // $4,999 % 500 = 499 (not 0), so isExactFiveHundred = false
+    expect(result.triggered).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────
+// Score tiers
+// ─────────────────────────────────────────
+describe('round_amount rule — score tiers', () => {
+
+  test('score does not change with context severity (amount-tiered)', async () => {
+    // Round amount uses fixed tiers, not severityToScore()
+    const severities: Array<'low' | 'medium' | 'high' | 'critical'> = [
+      'low', 'medium', 'high', 'critical'
+    ];
+
+    for (const severity of severities) {
+      const ctx = { ...roundContext, severity };
+      const result = await evaluateRoundAmount(
+        makeRoundTransaction(5000),
+        defaultRoundParams,
+        ctx
+      );
+      // Always 20 for $5,000 regardless of severity
+      expect(result.score).toBe(20);
+    }
+  });
+
+  test('$9,999 scores 15 (below $5,000 tier — $9,999 % 100 = 99)', async () => {
+    // $9,999 % 100 = 99, which is >= 100-0=100? No. 99 >= 100 is false.
+    // So tolerance=0 does not trigger on $9,999
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(9999),
+      defaultRoundParams,
+      roundContext
+    );
+    expect(result.triggered).toBe(false);
+  });
+
+  test('$9,000 scores 20 (in $5,000-$9,999 tier)', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(9000),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.score).toBe(20);
+  });
+
+  test('$10,000 scores 25 (in $10,000+ tier)', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(10000),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.triggered).toBe(true);
+    expect(result.score).toBe(25);
+  });
+});
+
+// ─────────────────────────────────────────
+// Parameter schema
+// ─────────────────────────────────────────
+describe('round_amount rule — parameterSchema', () => {
+
+  test('accepts valid parameters', () => {
+    expect(() =>
+      roundAmountSchema.parse({ min_amount: 1000, tolerance: 0 })
+    ).not.toThrow();
+  });
+
+  test('uses tolerance=0 as default', () => {
+    const result = roundAmountSchema.parse({ min_amount: 1000 });
+    expect(result.tolerance).toBe(0);
+  });
+
+  test('rejects negative min_amount', () => {
+    expect(() =>
+      roundAmountSchema.parse({ min_amount: -1, tolerance: 0 })
+    ).toThrow();
+  });
+
+  test('rejects tolerance above 5', () => {
+    expect(() =>
+      roundAmountSchema.parse({ min_amount: 1000, tolerance: 6 })
+    ).toThrow();
+  });
+
+  test('rejects negative tolerance', () => {
+    expect(() =>
+      roundAmountSchema.parse({ min_amount: 1000, tolerance: -1 })
+    ).toThrow();
+  });
+
+  test('accepts tolerance of exactly 5', () => {
+    expect(() =>
+      roundAmountSchema.parse({ min_amount: 1000, tolerance: 5 })
+    ).not.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────
+// Details object
+// ─────────────────────────────────────────
+describe('round_amount rule — details object', () => {
+
+  test('includes all required fields when triggered', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(5000),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.details).toMatchObject({
+      rule_type: 'round_amount',
+      amount: 5000,
+      min_amount: 1000,
+      tolerance: 0,
+      is_exact_round: true,
+      is_exact_thousand: true,
+      is_exact_five_hundred: true,
+      nearest_round: 5000,
+      message: expect.stringContaining('$5000.00'),
+    });
+  });
+
+  test('includes all required fields when not triggered', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(1234.56),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.details).toMatchObject({
+      rule_type: 'round_amount',
+      amount: 1234.56,
+      min_amount: 1000,
+      is_exact_round: false,
+      nearest_round: 1200,
+      message: null,
+    });
+  });
+
+  test('nearest_round is correct for $4,999', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(4999),
+      { min_amount: 1000, tolerance: 1 }, // use tolerance=1 to trigger
+      roundContext
+    );
+
+    expect(result.details.nearest_round).toBe(5000);
+  });
+
+  test('message includes amount and nearest round', async () => {
+    const result = await evaluateRoundAmount(
+      makeRoundTransaction(5000),
+      defaultRoundParams,
+      roundContext
+    );
+
+    expect(result.details.message).toContain('$5000.00');
+    expect(result.details.message).toContain('$5000.00'); // nearest round = $5,000
+  });
+});

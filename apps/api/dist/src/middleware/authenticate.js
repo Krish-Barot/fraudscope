@@ -9,7 +9,19 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.authenticate = authenticate;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-function authenticate(req, res, next) {
+const database_1 = require("../config/database");
+const UUID_V4_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function isJwtPayload(value) {
+    if (!value || typeof value !== 'object')
+        return false;
+    const payload = value;
+    const hasValidRole = payload.role === 'analyst' || payload.role === 'admin';
+    return (typeof payload.userId === 'string' &&
+        UUID_V4_LIKE_REGEX.test(payload.userId) &&
+        typeof payload.email === 'string' &&
+        hasValidRole);
+}
+async function authenticate(req, res, next) {
     // JWT comes in the Authorization header as "Bearer <token>"
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -34,9 +46,37 @@ function authenticate(req, res, next) {
             throw new Error('JWT_ACCESS_SECRET not configured');
         }
         const decoded = jsonwebtoken_1.default.verify(token, secret);
+        if (!isJwtPayload(decoded)) {
+            res.status(401).json({
+                error: {
+                    code: 'INVALID_TOKEN',
+                    message: 'Invalid token payload',
+                    request_id: req.requestId,
+                },
+            });
+            return;
+        }
+        const user = await (0, database_1.db)('users')
+            .select('id', 'role', 'is_active')
+            .where({ id: decoded.userId })
+            .first();
+        if (!user || !user.is_active) {
+            res.status(401).json({
+                error: {
+                    code: 'INVALID_TOKEN',
+                    message: 'Token user is no longer valid',
+                    request_id: req.requestId,
+                },
+            });
+            return;
+        }
         // Attach user info to the request object
         // Now any route handler can access req.user.role, req.user.userId, etc.
-        req.user = decoded;
+        req.user = {
+            userId: user.id,
+            email: decoded.email,
+            role: user.role,
+        };
         next();
     }
     catch (error) {

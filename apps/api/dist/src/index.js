@@ -16,6 +16,7 @@ const database_1 = require("./config/database");
 const requestId_1 = require("./middleware/requestId");
 const errorHandler_1 = require("./middleware/errorHandler");
 const transaction_routes_1 = __importDefault(require("./modules/transactions/transaction.routes"));
+const rules_routes_1 = __importDefault(require("./engine/rules/rules.routes"));
 const app = (0, express_1.default)();
 app.use(requestId_1.requestIdMiddleware);
 app.use(express_1.default.json());
@@ -23,6 +24,7 @@ app.use((0, cors_1.default)({
     origin: env.CORS_ORIGIN,
     credentials: true,
 }));
+app.use('/api/v1/rules', rules_routes_1.default);
 app.get('/health', (req, res) => {
     res.json({
         status: 'ok',

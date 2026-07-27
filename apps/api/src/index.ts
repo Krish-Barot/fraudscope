@@ -13,6 +13,7 @@ import { connectDatabase } from './config/database';
 import { requestIdMiddleware } from './middleware/requestId';
 import { errorHandler } from './middleware/errorHandler';
 import transactionRoutes from './modules/transactions/transaction.routes';
+import rulesRoutes from './engine/rules/rules.routes';
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.use(cors({
   origin: env.CORS_ORIGIN,
   credentials: true,
 }));
+app.use('/api/v1/rules', rulesRoutes);
 
 app.get('/health', (req, res) => {
   res.json({
@@ -47,3 +49,4 @@ start().catch((err) => {
   console.error('Failed to start server:', err);
   process.exit(1);
 });
+

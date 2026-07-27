@@ -67,6 +67,7 @@ const VALID_API_KEY = process.env.API_KEY || 'dev_api_key_fraudscope';
 // Generated with the same secret as the app uses
 // We'll generate this dynamically in beforeAll
 let ANALYST_TOKEN;
+const TEST_ANALYST_ID = '11111111-1111-4111-8111-111111111111';
 beforeAll(async () => {
     // Set TEST_DATABASE_URL so the app's database module picks it up
     process.env.NODE_ENV = 'test';
@@ -76,7 +77,7 @@ beforeAll(async () => {
     // We do this here so it uses the same JWT_ACCESS_SECRET the app uses
     const jwt = await Promise.resolve().then(() => __importStar(require('jsonwebtoken')));
     ANALYST_TOKEN = jwt.default.sign({
-        userId: 'test-analyst-id',
+        userId: TEST_ANALYST_ID,
         email: 'analyst@fraudscope.dev',
         role: 'analyst',
     }, process.env.JWT_ACCESS_SECRET || 'dev_access_secret_change_in_production', { expiresIn: '1h' });
@@ -87,6 +88,17 @@ beforeEach(async () => {
     // This ensures test 4 (duplicate external_id) doesn't fail
     // because test 1 already inserted the same ID
     await (0, testSetup_1.clearDatabase)(db);
+    // Recreate the authenticated analyst user after truncation so
+    // JWT-based GET endpoints can resolve req.user reliably.
+    await db('users').insert({
+        id: TEST_ANALYST_ID,
+        email: 'analyst@fraudscope.dev',
+        password_hash: 'test_hash',
+        first_name: 'Test',
+        last_name: 'Analyst',
+        role: 'analyst',
+        is_active: true,
+    });
 });
 afterAll(async () => {
     await (0, testSetup_1.closeConnections)(db);

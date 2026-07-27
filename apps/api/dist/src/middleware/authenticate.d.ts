@@ -11,5 +11,5 @@ declare global {
         }
     }
 }
-export declare function authenticate(req: Request, res: Response, next: NextFunction): Promise<void>;
+export declare function authenticate(req: Request, res: Response, next: NextFunction): void;
 //# sourceMappingURL=authenticate.d.ts.map

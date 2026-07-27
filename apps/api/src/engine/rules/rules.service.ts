@@ -55,9 +55,11 @@ async function writeAuditLog(
   eventType: string,
   ruleId: string,
   actorId: string | undefined,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  trx?: any
 ): Promise<void> {
-  await db('audit_logs').insert({
+  const query = trx ? trx('audit_logs') : db('audit_logs');
+  await query.insert({
     event_type: eventType,
     actor_id: actorId || null,
     actor_type: 'user',
@@ -344,13 +346,15 @@ export async function deleteRule(
     return { deleted: false, alertCount };
   }
 
-  await writeAuditLog('rule.deleted', id, actorId, {
-    name: existing.name,
-    type: existing.type,
-    alert_count_at_deletion: alertCount,
+  await db.transaction(async (trx) => {
+    await trx('alert_rules').where({ rule_id: id }).delete();
+    await writeAuditLog('rule.deleted', id, actorId, {
+      name: existing.name,
+      type: existing.type,
+      alert_count_at_deletion: alertCount,
+    }, trx);
+    await trx('rules').where({ id }).delete();
   });
-
-  await db('rules').where({ id }).delete();
 
   // Rule gone — invalidate cache so worker stops using it
   invalidateRuleCache();

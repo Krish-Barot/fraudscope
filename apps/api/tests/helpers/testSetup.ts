@@ -8,6 +8,7 @@
 
 import knex, { Knex } from 'knex';
 import path from 'path';
+import { ensureSeededUsers } from './testAuth';
 import { redisClient, redisPublisher } from '../../src/config/redis';
 import { db as appDb } from '../../src/config/database';
 
@@ -31,6 +32,7 @@ export function createTestDb(): Knex {
 // Called once before any tests run
 export async function runMigrations(db: Knex): Promise<void> {
   await db.migrate.latest();
+  await ensureSeededUsers(db);
   console.log('✅ Test database migrations complete');
 }
 
@@ -48,18 +50,24 @@ export async function clearDatabase(db: Knex): Promise<void> {
       alert_rules,
       alerts,
       transactions,
-      rules,
-      users
+      rules
     RESTART IDENTITY CASCADE
   `);
+  await ensureSeededUsers(db);
 }
 
-// Close all connections cleanly
-// Without this, Jest hangs after tests complete waiting for open handles
-export async function closeConnections(db: Knex): Promise<void> {
-  await db.destroy();        // test db instance
-  await appDb.destroy();     // app's db instance — this was the missing one
-  await redisClient.quit();
-  await redisPublisher.quit();
-  console.log('✓ All connections closed');
+// Close all connections cleanly for the test suite
+export async function closeConnections(db?: Knex): Promise<void> {
+  if (db) {
+    try {
+      await db.destroy();
+    } catch (err) {}
+  }
+  try {
+    await appDb.destroy();
+  } catch (err) {}
+  try {
+    redisClient.disconnect();
+    redisPublisher.disconnect();
+  } catch (err) {}
 }

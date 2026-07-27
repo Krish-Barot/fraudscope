@@ -11,20 +11,20 @@ export declare const createRuleSchema: z.ZodObject<{
     is_active: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
     type: "velocity" | "amount_anomaly" | "geo_mismatch" | "time_anomaly" | "round_amount";
-    is_active: boolean;
     name: string;
     parameters: Record<string, unknown>;
     severity: "low" | "medium" | "high" | "critical";
     score_weight: number;
+    is_active: boolean;
     description?: string | undefined;
 }, {
     type: "velocity" | "amount_anomaly" | "geo_mismatch" | "time_anomaly" | "round_amount";
     name: string;
     parameters: Record<string, unknown>;
     severity: "low" | "medium" | "high" | "critical";
-    is_active?: boolean | undefined;
     description?: string | undefined;
     score_weight?: number | undefined;
+    is_active?: boolean | undefined;
 }>;
 export declare const updateRuleSchema: z.ZodObject<{
     name: z.ZodString;
@@ -36,20 +36,20 @@ export declare const updateRuleSchema: z.ZodObject<{
     is_active: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
     type: "velocity" | "amount_anomaly" | "geo_mismatch" | "time_anomaly" | "round_amount";
-    is_active: boolean;
     name: string;
     parameters: Record<string, unknown>;
     severity: "low" | "medium" | "high" | "critical";
     score_weight: number;
+    is_active: boolean;
     description?: string | undefined;
 }, {
     type: "velocity" | "amount_anomaly" | "geo_mismatch" | "time_anomaly" | "round_amount";
     name: string;
     parameters: Record<string, unknown>;
     severity: "low" | "medium" | "high" | "critical";
-    is_active?: boolean | undefined;
     description?: string | undefined;
     score_weight?: number | undefined;
+    is_active?: boolean | undefined;
 }>;
 export declare const toggleRuleSchema: z.ZodObject<{
     is_active: z.ZodBoolean;
@@ -64,12 +64,12 @@ export declare const listRulesQuerySchema: z.ZodObject<{
     is_active: z.ZodOptional<z.ZodEffects<z.ZodString, boolean, string>>;
 }, "strip", z.ZodTypeAny, {
     type?: "velocity" | "amount_anomaly" | "geo_mismatch" | "time_anomaly" | "round_amount" | undefined;
-    is_active?: boolean | undefined;
     severity?: "low" | "medium" | "high" | "critical" | undefined;
+    is_active?: boolean | undefined;
 }, {
     type?: "velocity" | "amount_anomaly" | "geo_mismatch" | "time_anomaly" | "round_amount" | undefined;
-    is_active?: string | undefined;
     severity?: "low" | "medium" | "high" | "critical" | undefined;
+    is_active?: string | undefined;
 }>;
 export type CreateRuleInput = z.infer<typeof createRuleSchema>;
 export type UpdateRuleInput = z.infer<typeof updateRuleSchema>;

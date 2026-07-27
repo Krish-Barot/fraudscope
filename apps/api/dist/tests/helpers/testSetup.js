@@ -18,6 +18,17 @@ const knex_1 = __importDefault(require("knex"));
 const path_1 = __importDefault(require("path"));
 const redis_1 = require("../../src/config/redis");
 const database_1 = require("../../src/config/database");
+async function closeRedisClient(client) {
+    try {
+        await client.quit();
+    }
+    catch {
+        client.disconnect();
+    }
+    finally {
+        client.disconnect();
+    }
+}
 // Create a dedicated knex instance pointing at the TEST database
 // This is completely separate from the main app's database connection
 function createTestDb() {
@@ -60,10 +71,14 @@ async function clearDatabase(db) {
 // Close all connections cleanly
 // Without this, Jest hangs after tests complete waiting for open handles
 async function closeConnections(db) {
-    await db.destroy(); // test db instance
-    await database_1.db.destroy(); // app's db instance — this was the missing one
-    await redis_1.redisClient.quit();
-    await redis_1.redisPublisher.quit();
+    await Promise.allSettled([
+        db.destroy(),
+        database_1.db.destroy(),
+    ]);
+    await Promise.allSettled([
+        closeRedisClient(redis_1.redisClient),
+        closeRedisClient(redis_1.redisPublisher),
+    ]);
     console.log('✓ All connections closed');
 }
 //# sourceMappingURL=testSetup.js.map

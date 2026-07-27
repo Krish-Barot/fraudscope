@@ -48,10 +48,3 @@ redisClient.on('error', (err) => console.error('❌ Redis client error:', err.me
 
 redisPublisher.on('connect', () => console.log('✅ Redis publisher connected'));
 redisPublisher.on('error', (err) => console.error('❌ Redis publisher error:', err.message));
-
-// Graceful shutdown — close Redis connections when the process exits
-// Without this, the container takes 10s to stop instead of instant
-process.on('SIGTERM', async () => {
-  await redisClient.quit();
-  await redisPublisher.quit();
-});

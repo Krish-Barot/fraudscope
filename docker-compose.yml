@@ -130,7 +130,11 @@ services:
       - .:/app
       - /app/node_modules
     healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/worker-health"]
+      test: ["CMD-SHELL", "test -f /tmp/worker-health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy

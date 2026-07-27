@@ -15,45 +15,13 @@
 // 7. List with status=flagged -> only flagged
 // 8. Get by valid ID -> 200 + account_history
 // 9. Get non-existent -> 404
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const supertest_1 = __importDefault(require("supertest"));
 const testSetup_1 = require("./helpers/testSetup");
+const testAuth_1 = require("./helpers/testAuth");
 const testApp_1 = require("./helpers/testApp");
 // ─────────────────────────────────────────
 // Setup
@@ -67,20 +35,13 @@ const VALID_API_KEY = process.env.API_KEY || 'dev_api_key_fraudscope';
 // Generated with the same secret as the app uses
 // We'll generate this dynamically in beforeAll
 let ANALYST_TOKEN;
-const TEST_ANALYST_ID = '11111111-1111-4111-8111-111111111111';
 beforeAll(async () => {
     // Set TEST_DATABASE_URL so the app's database module picks it up
     process.env.NODE_ENV = 'test';
     db = (0, testSetup_1.createTestDb)();
     await (0, testSetup_1.runMigrations)(db);
-    // Generate a test JWT token
-    // We do this here so it uses the same JWT_ACCESS_SECRET the app uses
-    const jwt = await Promise.resolve().then(() => __importStar(require('jsonwebtoken')));
-    ANALYST_TOKEN = jwt.default.sign({
-        userId: TEST_ANALYST_ID,
-        email: 'analyst@fraudscope.dev',
-        role: 'analyst',
-    }, process.env.JWT_ACCESS_SECRET || 'dev_access_secret_change_in_production', { expiresIn: '1h' });
+    const tokens = await (0, testAuth_1.seedTestUsersAndGenerateTokens)(db);
+    ANALYST_TOKEN = tokens.analystToken;
     console.log('✅ Test setup complete');
 });
 beforeEach(async () => {
@@ -88,17 +49,6 @@ beforeEach(async () => {
     // This ensures test 4 (duplicate external_id) doesn't fail
     // because test 1 already inserted the same ID
     await (0, testSetup_1.clearDatabase)(db);
-    // Recreate the authenticated analyst user after truncation so
-    // JWT-based GET endpoints can resolve req.user reliably.
-    await db('users').insert({
-        id: TEST_ANALYST_ID,
-        email: 'analyst@fraudscope.dev',
-        password_hash: 'test_hash',
-        first_name: 'Test',
-        last_name: 'Analyst',
-        role: 'analyst',
-        is_active: true,
-    });
 });
 afterAll(async () => {
     await (0, testSetup_1.closeConnections)(db);

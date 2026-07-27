@@ -37,6 +37,8 @@ let db: Knex;
 const VALID_API_KEY = process.env.API_KEY || 'dev_api_key_fraudscope';
 
 // A valid JWT token for analyst endpoints (GET requests)
+import { getTestTokens } from './helpers/testAuth';
+
 // Generated with the same secret as the app uses
 // We'll generate this dynamically in beforeAll
 let ANALYST_TOKEN: string;
@@ -48,18 +50,8 @@ beforeAll(async () => {
   db = createTestDb();
   await runMigrations(db);
 
-  // Generate a test JWT token
-  // We do this here so it uses the same JWT_ACCESS_SECRET the app uses
-  const jwt = await import('jsonwebtoken');
-  ANALYST_TOKEN = jwt.default.sign(
-    {
-      userId: 'test-analyst-id',
-      email: 'analyst@fraudscope.dev',
-      role: 'analyst',
-    },
-    process.env.JWT_ACCESS_SECRET || 'dev_access_secret_change_in_production',
-    { expiresIn: '1h' }
-  );
+  const tokens = await getTestTokens(db);
+  ANALYST_TOKEN = tokens.ANALYST_TOKEN;
 
   console.log('✅ Test setup complete');
 });

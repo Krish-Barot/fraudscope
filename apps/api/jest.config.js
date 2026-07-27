@@ -15,6 +15,7 @@ const config = {
   clearMocks: true,
   restoreMocks: true,
   verbose: true,
+  globalTeardown: '<rootDir>/tests/helpers/globalTeardown.ts',
 };
 
 module.exports = config;

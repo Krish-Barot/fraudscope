@@ -1,34 +1,42 @@
 // apps/api/src/engine/scorer.ts
-// Evaluates a transaction against all active fraud detection rules
-// Returns a composite risk score and list of triggered rules
+// Fraud evaluation engine — two responsibilities:
 //
-// RULE CACHING:
-// Loading rules from PostgreSQL on every transaction would be slow
-// and would hammer the database. Rules change rarely (admins update them
-// occasionally) so we cache them in memory for 60 seconds.
-// If an admin toggles a rule off, the change takes effect within 60s.
+// 1. evaluate() — pure function, runs rules, returns composite score
+//    Used by: worker (via evaluateAndProcess), rules API stats, tests
 //
-// PARALLEL EVALUATION:
-// All rules run simultaneously via Promise.all — not sequentially.
-// If you have 5 rules and each takes 50ms, sequential = 250ms total.
-// Parallel = ~50ms total (they all run at the same time).
-// This is safe because rules are independent — they don't share state
-// with each other (each rule uses its own Redis keys).
+// 2. evaluateAndProcess() — evaluate + handle result
+//    Used by: worker only
+//    If score >= 20: writes to PostgreSQL (transaction), publishes to Redis
+//    If score < 20:  marks transaction as processed, no alert created
+//
+// POSTGRESQL TRANSACTION GUARANTEE:
+// Alert generation uses a DB transaction wrapping 4 operations:
+//   UPDATE transactions → INSERT alerts → INSERT alert_rules → INSERT audit_logs
+// If ANY of these fails, the entire transaction rolls back.
+// This ensures we never have:
+//   - A flagged transaction with no alert
+//   - An alert with no triggered rules
+//   - A missing audit log entry
+// Atomicity is critical for compliance — every state change must be traceable.
+//
+// PUBSUB AFTER COMMIT:
+// We publish to Redis AFTER the DB transaction commits.
+// If we published before commit and the commit failed, the dashboard
+// would show an alert that doesn't exist in the database.
+// Publish-after-commit means: if you see it on the dashboard, it's in the DB.
 
 import { db } from "../config/database";
-import { redisClient } from "../config/redis";
+import { redisClient, redisPublisher } from "../config/redis";
 import { DbRule, TransactionData, RuleResult } from "./rules/types";
 
-// Import all rule evaluators
-// Each module exports { evaluate, parameterSchema }
 import * as velocityRule from "./rules/velocity";
 import * as amountAnomalyRule from "./rules/amountAnomaly";
 import * as geoMismatchRule from "./rules/geoMismatch";
 import * as timeAnomalyRule from "./rules/timeAnomaly";
 import * as roundAmountRule from "./rules/roundAmount";
 
-// Map rule type strings (stored in DB) to their implementation modules
-// When you add a new rule type, add it here
+// Registry maps DB rule type strings to implementation modules
+// Adding a new rule: implement the module, add one line here
 const RULE_REGISTRY: Record<
   string,
   { evaluate: Function; parameterSchema: any }
@@ -41,29 +49,32 @@ const RULE_REGISTRY: Record<
 };
 
 // ─────────────────────────────────────────
+// Redis channels
+// ─────────────────────────────────────────
+const ALERTS_PUBSUB_CHANNEL = "alerts:new";
+
+// ─────────────────────────────────────────
 // In-memory rule cache
-// Avoids loading rules from PostgreSQL on every transaction
+// Rules are loaded from PostgreSQL once and cached for 60 seconds
+// Changes made via the rules API take effect within one cache TTL
 // ─────────────────────────────────────────
 let cachedRules: DbRule[] = [];
 let cacheLastRefreshed: number = 0;
-const CACHE_TTL_MS = 60 * 1000; // 60 seconds
+const CACHE_TTL_MS = 60 * 1000;
 
 async function getActiveRules(): Promise<DbRule[]> {
   const now = Date.now();
 
-  // Return cached rules if still fresh
   if (cachedRules.length > 0 && now - cacheLastRefreshed < CACHE_TTL_MS) {
     return cachedRules;
   }
 
-  // Cache stale or empty — reload from PostgreSQL
   const rules = await db("rules")
     .where("is_active", true)
     .select("id", "name", "type", "parameters", "severity", "score_weight");
 
   cachedRules = rules.map((rule: any) => ({
     ...rule,
-    // parameters is stored as JSONB — knex may return it as object or string
     parameters:
       typeof rule.parameters === "string"
         ? JSON.parse(rule.parameters)
@@ -72,14 +83,12 @@ async function getActiveRules(): Promise<DbRule[]> {
 
   cacheLastRefreshed = now;
   console.log(
-    `✅ Rule cache refreshed — ${cachedRules.length} active rules loaded`,
+    `✓ Rule cache refreshed — ${cachedRules.length} active rules loaded`,
   );
 
   return cachedRules;
 }
 
-// Force cache refresh — called when admin toggles a rule
-// (we'll wire this up in FS-17 rules API)
 export function invalidateRuleCache(): void {
   cacheLastRefreshed = 0;
   console.log("Rule cache invalidated — will reload on next transaction");
@@ -114,43 +123,39 @@ export interface ScorerResult {
 }
 
 // ─────────────────────────────────────────
-// Main evaluate function
-// Called by the worker for every transaction
+// Pure evaluation — runs all active rules in parallel
+// Returns score + triggered rules without any side effects
+// No database writes, no Redis publishes
 // ─────────────────────────────────────────
 export async function evaluate(
   transaction: TransactionData,
 ): Promise<ScorerResult> {
-  const rules = await getActiveRules();
+  // Normalize amount — PostgreSQL DECIMAL comes back as string from Knex
+  const normalizedTransaction: TransactionData = {
+    ...transaction,
+    amount:
+      typeof transaction.amount === "string"
+        ? parseFloat(transaction.amount as unknown as string)
+        : transaction.amount,
+  };
 
+  const rules = await getActiveRules();
   if (rules.length === 0) {
     return { score: 0, severity: null, triggeredRules: [] };
   }
 
-  // Shared context passed to every rule
-  const context = { redis: redisClient, db };
-
-  // Run ALL rules in parallel — each rule is independent
-  // Promise.all waits for all to complete before continuing
-  // If one rule throws, Promise.all rejects — we handle this below
   const rulePromises = rules.map(async (rule) => {
-    const ruleModule = RULE_REGISTRY[rule.type];
-
-    if (!ruleModule) {
-      // Unknown rule type — this happens if a new rule type is in the DB
-      // but hasn't been implemented yet. Skip it safely.
-      console.warn(`Unknown rule type: ${rule.type} — skipping`);
-      return null;
-    }
 
     try {
+      const ruleModule = RULE_REGISTRY[rule.type];
+      if (!ruleModule) {
+        throw new Error(`Unknown rule type: ${rule.type}`);
+      }
+
       const result: RuleResult = await ruleModule.evaluate(
-        transaction,
+        normalizedTransaction, // ← changed
         rule.parameters,
-        {
-          redis: redisClient,
-          db,
-          severity: rule.severity,
-        },
+        { redis: redisClient, db, severity: rule.severity },
       );
 
       if (result.triggered) {
@@ -158,20 +163,14 @@ export async function evaluate(
           ruleId: rule.id,
           ruleName: rule.name,
           ruleType: rule.type,
-          // Scale the raw rule score by the rule's weight
-          // score_weight=25 means this rule contributes up to 25 points
-          // score_weight=15 means a lower-priority rule
-          scoreContribution: Math.round(
-            (result.score / 25) * rule.score_weight,
-          ),
+          scoreContribution: result.score,
           details: result.details,
         } as TriggeredRule;
       }
 
-      return null; // rule didn't trigger
+      return null;
     } catch (error) {
-      // One rule failing should never stop other rules from running
-      // Log the error and continue — better to miss one rule than crash
+      // One rule failing never stops the others
       console.error(
         `Rule '${rule.name}' (${rule.type}) threw an error:`,
         (error as Error).message,
@@ -180,19 +179,190 @@ export async function evaluate(
     }
   });
 
-  // Wait for all rules to finish
   const results = await Promise.all(rulePromises);
-
-  // Filter out null results (rules that didn't trigger or failed)
   const triggeredRules = results.filter((r): r is TriggeredRule => r !== null);
 
-  // Sum all score contributions, cap at 100
+  // Sum contributions, cap at 100
   const rawScore = triggeredRules.reduce(
-    (sum, rule) => sum + rule.scoreContribution,
+    (sum, r) => sum + r.scoreContribution,
     0,
   );
   const score = Math.min(rawScore, 100);
   const severity = scoreToSeverity(score);
 
   return { score, severity, triggeredRules };
+}
+
+// ─────────────────────────────────────────
+// Alert generation — writes to PostgreSQL inside a transaction
+// Called when score >= 20
+//
+// Operations (all-or-nothing):
+// 1. UPDATE transactions  SET status='flagged', processed_at=NOW()
+// 2. INSERT alerts         → get new alert UUID
+// 3. INSERT alert_rules    → one row per triggered rule
+// 4. INSERT audit_logs     → immutable event record
+// 5. COMMIT
+// Then: PUBLISH to Redis PubSub (after commit — see module header note)
+// ─────────────────────────────────────────
+async function generateAlert(
+  transaction: TransactionData,
+  score: number,
+  severity: string,
+  triggeredRules: TriggeredRule[],
+): Promise<string> {
+  // returns the new alert ID
+
+  let alertId: string;
+
+  // db.transaction() wraps everything in BEGIN/COMMIT
+  // If any operation throws, Knex automatically rolls back (ROLLBACK)
+  // and re-throws the error so the caller knows it failed
+  await db.transaction(async (trx) => {
+    // ── Step 1: Mark transaction as flagged ───────────────────────
+    await trx("transactions").where({ id: transaction.id }).update({
+      status: "flagged",
+      processed_at: trx.fn.now(),
+    });
+
+    // ── Step 2: Create the alert record ───────────────────────────
+    const [alert] = await trx("alerts")
+      .insert({
+        transaction_id: transaction.id,
+        risk_score: score,
+        severity,
+        status: "new",
+      })
+      .returning("*");
+
+    alertId = alert.id;
+
+    // ── Step 3: Insert one alert_rules row per triggered rule ──────
+    // This is the "why was this flagged" data — stores each rule's
+    // individual contribution and explanation for the alert detail page
+    if (triggeredRules.length > 0) {
+      await trx("alert_rules").insert(
+        triggeredRules.map((rule) => ({
+          alert_id: alertId,
+          rule_id: rule.ruleId,
+          // score_contribution: how many points this rule added
+          score_contribution: rule.scoreContribution,
+          // details: JSONB payload explaining why this rule fired
+          // e.g. { current_count: 8, threshold: 5, message: "..." }
+          details: JSON.stringify(rule.details),
+        })),
+      );
+    }
+
+    // ── Step 4: Write to audit_logs ───────────────────────────────
+    // Immutable event record — cannot be deleted or modified
+    // Required for compliance: every state change must be traceable
+    await trx("audit_logs").insert({
+      event_type: "alert.generated",
+      actor_type: "system", // engine, not a human analyst
+      target_type: "transaction",
+      target_id: transaction.id,
+      payload: JSON.stringify({
+        alert_id: alertId,
+        risk_score: score,
+        severity,
+        triggered_rules: triggeredRules.map((r) => ({
+          type: r.ruleType,
+          name: r.ruleName,
+          score_contribution: r.scoreContribution,
+        })),
+      }),
+      source: "engine",
+    });
+
+    // db.transaction() auto-commits here if no error was thrown
+    // If any step above threw, it auto-rolled back instead
+  });
+
+  // ── Step 5: Publish to Redis PubSub ───────────────────────────
+  // This happens OUTSIDE the DB transaction (after commit)
+  // Reason: if publish failed but the transaction was still open,
+  // rolling back would lose the alert. By publishing after commit,
+  // the worst case is: alert exists in DB but dashboard doesn't
+  // show it immediately. On next page refresh it will appear.
+  // The reverse (dashboard shows alert that doesn't exist in DB)
+  // would be far more confusing for analysts.
+  await redisPublisher.publish(
+    ALERTS_PUBSUB_CHANNEL,
+    JSON.stringify({
+      id: alertId!,
+      transaction_id: transaction.id,
+      risk_score: score,
+      severity,
+      status: "new",
+      triggered_rules: triggeredRules.map((r) => ({
+        type: r.ruleType,
+        name: r.ruleName,
+        score_contribution: r.scoreContribution,
+      })),
+      transaction: {
+        account_id: transaction.account_id,
+        amount: transaction.amount,
+        currency: transaction.currency,
+        country_code: transaction.country_code,
+        channel: transaction.channel,
+      },
+      created_at: new Date().toISOString(),
+    }),
+  );
+
+  return alertId!;
+}
+
+// ─────────────────────────────────────────
+// Mark a clean transaction as processed
+// Called when score < 20 — no alert, but we still need to update
+// processed_at so we know the engine evaluated this transaction
+// ─────────────────────────────────────────
+async function markProcessed(transactionId: string): Promise<void> {
+  await db("transactions")
+    .where({ id: transactionId })
+    .update({ processed_at: db.fn.now() });
+}
+
+// ─────────────────────────────────────────
+// Main entry point for the worker
+// Evaluates and handles the result in one call
+// Returns the full result so the worker can log it
+// ─────────────────────────────────────────
+export interface ProcessResult {
+  score: number;
+  severity: string | null;
+  alertId: string | null; // null if score < 20
+  triggeredRules: TriggeredRule[];
+}
+
+export async function evaluateAndProcess(
+  transaction: TransactionData,
+): Promise<ProcessResult> {
+  // Ensure amount is always a number — Knex returns DECIMAL as string
+  const normalizedTransaction: TransactionData = {
+    ...transaction,
+    amount:
+      typeof transaction.amount === "string"
+        ? parseFloat(transaction.amount)
+        : transaction.amount,
+  };
+
+  const { score, severity, triggeredRules } = await evaluate(
+    normalizedTransaction,
+  );
+
+  if (score >= 20 && severity) {
+    const alertId = await generateAlert(
+      normalizedTransaction,
+      score,
+      severity,
+      triggeredRules,
+    );
+    return { score, severity, alertId, triggeredRules };
+  } else {
+    await markProcessed(normalizedTransaction.id);
+    return { score, severity: null, alertId: null, triggeredRules: [] };
+  }
 }

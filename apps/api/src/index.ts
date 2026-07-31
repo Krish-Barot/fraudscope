@@ -9,6 +9,7 @@ const env = validateApiEnv();
 
 import express from 'express';
 import cors from 'cors';
+import type { AddressInfo } from 'node:net';
 import { connectDatabase } from './config/database';
 import { requestIdMiddleware } from './middleware/requestId';
 import { errorHandler } from './middleware/errorHandler';
@@ -37,12 +38,38 @@ app.get('/health', (req, res) => {
 app.use('/api/v1/transactions', transactionRoutes);
 app.use(errorHandler);
 
+function startListening(port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, () => {
+      const address = server.address() as AddressInfo | string | null;
+
+      if (address && typeof address === 'object') {
+        console.log(`✓ FraudScope API running on port ${address.port}`);
+      } else {
+        console.log(`✓ FraudScope API running on port ${port}`);
+      }
+
+      resolve();
+    });
+
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error('');
+        console.error(`❌ Port ${port} is already in use.`);
+        console.error('   Stop the process using that port or set PORT to another value, then restart.');
+        console.error('');
+        process.exit(1);
+      }
+
+      reject(err);
+    });
+  });
+}
+
 async function start() {
   await connectDatabase();
 
-  app.listen(env.PORT, () => {
-    console.log(`✓ FraudScope API running on port ${env.PORT}`);
-  });
+  await startListening(env.PORT);
 }
 
 start().catch((err) => {

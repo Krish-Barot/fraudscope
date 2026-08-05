@@ -4,23 +4,11 @@ import { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Bell, Clock, User, Search, LogOut } from 'lucide-react';
 import clsx from 'clsx';
-import { ACCESS_TOKEN_COOKIE } from '../../lib/auth';
-
-function getInitials(email: string): string {
-  if (!email) return 'FS';
-  const namePart = email.split('@')[0];
-  const parts = namePart.split(/[\._\-]/).filter(Boolean);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-  }
-  return namePart.slice(0, 2).toUpperCase();
-}
+import { useAuth } from '../../lib/authContext';
 
 function Breadcrumb() {
   const pathname = usePathname();
 
-  // /dashboard -> ["FraudScope", "Dashboard"]
-  // /dashboard/transactions -> ["FraudScope", "Dashboard", "Transactions"]
   const rawSegments = pathname.split('/').filter(Boolean);
   const segments = ['FraudScope', ...rawSegments.map(s => s.charAt(0).toUpperCase() + s.slice(1))];
 
@@ -45,6 +33,63 @@ function Breadcrumb() {
   );
 }
 
+function UserMenu({ email, role }: { email: string; role: string }) {
+  const [open, setOpen] = useState(false);
+  const router = useRouter();
+  const { logout } = useAuth();
+
+  async function handleLogout() {
+    await logout();
+    router.push('/login');
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick() { setOpen(false); }
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, [open]);
+
+  const initials = email
+    .split('@')[0]
+    .split(/[._-]/)
+    .slice(0, 2)
+    .map(s => s[0]?.toUpperCase() || '')
+    .join('');
+
+  return (
+    <div className="relative">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(prev => !prev); }}
+        className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
+      >
+        <div className="w-7 h-7 bg-blue-600 rounded-full flex items-center justify-center text-xs font-bold text-white">
+          {initials || 'U'}
+        </div>
+        <span className="hidden sm:block text-sm max-w-28 truncate">{email}</span>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-52 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50">
+          <div className="px-4 py-3 border-b border-slate-700">
+            <p className="text-sm text-slate-200 font-medium truncate">{email}</p>
+            <p className="text-xs text-slate-500 mt-0.5 capitalize">{role}</p>
+          </div>
+          <div className="p-1">
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md text-slate-400 hover:text-red-400 hover:bg-slate-700 transition-colors"
+            >
+              <LogOut size={14} />
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface TopBarProps {
   userEmail: string;
   userRole: string;
@@ -52,26 +97,6 @@ interface TopBarProps {
 }
 
 export function TopBar({ userEmail, userRole }: TopBarProps) {
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const router = useRouter();
-
-  function handleLogout() {
-    document.cookie = `${ACCESS_TOKEN_COOKIE}=; max-age=0; path=/`;
-    document.cookie = `fraudscope_refresh_token=; max-age=0; path=/`;
-    router.push('/login');
-  }
-
-  useEffect(() => {
-    if (!dropdownOpen) return;
-    function handleClickOutside() {
-      setDropdownOpen(false);
-    }
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
-  }, [dropdownOpen]);
-
-  const initials = getInitials(userEmail);
-
   return (
     <header
       className={clsx(
@@ -100,7 +125,7 @@ export function TopBar({ userEmail, userRole }: TopBarProps) {
         />
       </div>
 
-      {/* Right section: Action buttons + User Avatar */}
+      {/* Right section: Action buttons + User Menu */}
       <div className="flex items-center gap-1">
         {/* Bell icon button */}
         <button
@@ -129,45 +154,7 @@ export function TopBar({ userEmail, userRole }: TopBarProps) {
           <User size={16} />
         </button>
 
-        {/* Avatar button & Dropdown */}
-        <div className="relative ml-1">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setDropdownOpen((prev) => !prev);
-            }}
-            className="w-[28px] h-[28px] rounded-full bg-[#3882F6] flex items-center justify-center text-[11px] font-bold text-white cursor-pointer select-none"
-          >
-            {initials}
-          </button>
-
-          {dropdownOpen && (
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="absolute right-0 top-full mt-1.5 w-52 bg-[#131929] border border-[#1E2535] rounded-lg shadow-xl z-50 p-3 space-y-3"
-            >
-              <div>
-                <p className="text-[13px] font-medium text-[#F1F3FA] truncate">
-                  {userEmail}
-                </p>
-                <p className="text-[11px] text-[#8B8FA8] capitalize mt-0.5">
-                  Role: {userRole}
-                </p>
-              </div>
-              <div className="pt-2 border-t border-[#1E2535]">
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 text-[12px] text-[#EF4444] hover:bg-[rgba(239,68,68,0.1)] rounded transition-colors duration-150"
-                >
-                  <LogOut size={14} />
-                  Sign out
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        <UserMenu email={userEmail} role={userRole} />
       </div>
     </header>
   );

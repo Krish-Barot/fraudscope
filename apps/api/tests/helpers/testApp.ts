@@ -2,10 +2,12 @@
 
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import { requestIdMiddleware } from '../../src/middleware/requestId';
 import { errorHandler } from '../../src/middleware/errorHandler';
+import authRoutes from '../../src/modules/auth/auth.routes';
 import transactionRoutes from '../../src/modules/transactions/transaction.routes';
-import rulesRoutes from '../../src/engine/rules/rules.routes';
+import rulesRoutes from '../../src/modules/rules/rules.routes';
 
 export function createTestApp() {
   const app = express();
@@ -13,13 +15,13 @@ export function createTestApp() {
   app.use(requestIdMiddleware);
   app.use(express.json());
   app.use(cors());
+  app.use(cookieParser());
 
-  app.get('/health', (req, res) => {
-    res.json({ status: 'ok' });
-  });
+  app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+  app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/transactions', transactionRoutes);
-  app.use('/api/v1/rules', rulesRoutes);   
+  app.use('/api/v1/rules', rulesRoutes);
 
   app.use(errorHandler);
 

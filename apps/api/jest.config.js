@@ -15,6 +15,7 @@ const config = {
   clearMocks: true,
   restoreMocks: true,
   verbose: true,
+  detectOpenHandles: true,
   globalTeardown: '<rootDir>/tests/helpers/globalTeardown.ts',
 };
 

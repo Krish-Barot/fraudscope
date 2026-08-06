@@ -69,10 +69,10 @@ export function isRoundAmount(amount: number, tolerance: number): boolean {
   // e.g. 5000.1 % 100 might return 0.09999... instead of 0.1
   const remainder = parseFloat((amount % 100).toFixed(2));
 
-  // Just above a round number: $5,001 with tolerance=1 → remainder=1 → 1<=1 ✓
+  // Just above a round number: $5,001 with tolerance=1 → remainder=1 → 1<=1 ✅
   const justAbove = remainder <= tolerance;
 
-  // Just below a round number: $4,999 with tolerance=1 → remainder=99 → 99>=(100-1) ✓
+  // Just below a round number: $4,999 with tolerance=1 → remainder=99 → 99>=(100-1) ✅
   const justBelow = remainder >= (100 - tolerance);
 
   return justAbove || justBelow;
@@ -84,7 +84,7 @@ export function isRoundAmount(amount: number, tolerance: number): boolean {
 // ─────────────────────────────────────────
 export function getAmountScore(amount: number): number {
   if (amount >= 10000) return 25;  // $10,000+ — reporting threshold territory
-  if (amount >= 5000)  return 20;  // $5,000-$9,999 — approaching threshold
+  if (amount >= 5000) return 20;  // $5,000-$9,999 — approaching threshold
   return 15;                        // $1,000-$4,999 — suspicious but lower risk
 }
 

@@ -42,7 +42,7 @@ const reader = new Redis(env.REDIS_URL || "redis://redis:6379", {
   retryStrategy: (times) => Math.min(times * 100, 3000),
 });
 
-reader.on("connect", () => console.log("✓ Worker Redis reader connected"));
+reader.on("connect", () => console.log("✅ Worker Redis reader connected"));
 reader.on("error", (err) =>
   console.error("✗ Worker Redis error:", err.message),
 );
@@ -149,11 +149,11 @@ function parseStreamMessage(fields: string[]): TransactionData {
 async function ensureConsumerGroup(): Promise<void> {
   try {
     await reader.xgroup("CREATE", STREAM_NAME, GROUP_NAME, "$", "MKSTREAM");
-    console.log(`✓ Consumer group '${GROUP_NAME}' created`);
+    console.log(` Consumer group '${GROUP_NAME}' created`);
   } catch (error: unknown) {
     const { code, message } = getRedisErrorDetails(error);
     if (code === "BUSYGROUP" || message.includes("BUSYGROUP")) {
-      console.log(`✓ Consumer group '${GROUP_NAME}' already exists`);
+      console.log(`✅ Consumer group '${GROUP_NAME}' already exists`);
     } else {
       throw error;
     }
@@ -181,7 +181,7 @@ async function reclaimPendingMessages(): Promise<void> {
       : Number(pendingSummary ?? 0);
 
     if (!pendingCount) {
-      console.log("✓ No pending messages to reclaim");
+      console.log("✅ No pending messages to reclaim");
       return;
     }
 
@@ -204,7 +204,7 @@ async function reclaimPendingMessages(): Promise<void> {
         await processMessage(messageId, fields);
       }
     } else {
-      console.log("✓ No pending messages to reclaim");
+      console.log("✅ No pending messages to reclaim");
     }
   } catch (error: unknown) {
     const { code, message } = getRedisErrorDetails(error);
@@ -244,17 +244,17 @@ async function processMessage(
     if (result.alertId) {
       console.log(
         `[FLAGGED] ${transaction.account_id} | ` +
-          `$${transaction.amount} ${transaction.currency} | ` +
-          `score: ${result.score} | ` +
-          `severity: ${result.severity} | ` +
-          `rules: ${result.triggeredRules.map((r) => r.ruleType).join(", ")} | ` +
-          `alert: ${result.alertId}`,
+        `$${transaction.amount} ${transaction.currency} | ` +
+        `score: ${result.score} | ` +
+        `severity: ${result.severity} | ` +
+        `rules: ${result.triggeredRules.map((r) => r.ruleType).join(", ")} | ` +
+        `alert: ${result.alertId}`,
       );
     } else {
       console.log(
         `[CLEAN]   ${transaction.account_id} | ` +
-          `$${transaction.amount} ${transaction.currency} | ` +
-          `score: ${result.score}`,
+        `$${transaction.amount} ${transaction.currency} | ` +
+        `score: ${result.score}`,
       );
     }
 
@@ -300,7 +300,7 @@ async function processMessage(
 // Main processing loop
 // ─────────────────────────────────────────
 async function runLoop(): Promise<void> {
-  console.log(`✓ Worker loop started — listening on '${STREAM_NAME}'`);
+  console.log(`✅ Worker loop started — listening on '${STREAM_NAME}'`);
   console.log(`  Consumer:  ${CONSUMER_NAME}`);
   console.log(`  Group:     ${GROUP_NAME}`);
   console.log(`  Batch:     ${BATCH_SIZE} messages per read`);
@@ -381,13 +381,13 @@ async function shutdown(signal: string): Promise<void> {
     await reader.quit();
     await db.destroy();
     await clearWorkerHealth();
-    console.log("✓ Connections closed");
+    console.log("✅ Connections closed");
   } catch (err) {
     console.error("Error during shutdown:", err);
   }
 
   clearTimeout(timeout);
-  console.log("✓ Worker shut down cleanly");
+  console.log("✅ Worker shut down cleanly");
   process.exit(0);
 }
 
@@ -405,7 +405,7 @@ async function start(): Promise<void> {
 
   try {
     await db.raw("SELECT 1");
-    console.log("✓ Database connected");
+    console.log("✅ Database connected");
 
     await waitForRedisReady();
 

@@ -5,6 +5,45 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Bell, Clock, User, Search, LogOut } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../lib/authContext';
+import { useSocket } from '../../hooks/useSocket';
+
+function WebSocketStatus() {
+  const { connected } = useSocket();
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  return (
+    <div
+      className="relative flex items-center gap-1.5 cursor-default"
+      onMouseEnter={() => setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+    >
+      {/* Status dot with pulse animation when connected */}
+      <div className="relative">
+        <div className={clsx(
+          'w-2 h-2 rounded-full transition-colors duration-300',
+          connected ? 'bg-emerald-400' : 'bg-rose-500'
+        )} />
+        {connected && (
+          <div className="absolute inset-0 w-2 h-2 bg-emerald-400 rounded-full animate-ping opacity-75" />
+        )}
+      </div>
+
+      <span className={clsx(
+        'text-xs font-medium transition-colors duration-300',
+        connected ? 'text-emerald-400' : 'text-rose-500'
+      )}>
+        {connected ? 'Live' : 'Offline'}
+      </span>
+
+      {/* Tooltip */}
+      {showTooltip && (
+        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-slate-300 whitespace-nowrap z-50">
+          {connected ? 'Real-time feed active' : 'Connecting to live feed...'}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Breadcrumb() {
   const pathname = usePathname();
@@ -125,8 +164,10 @@ export function TopBar({ userEmail, userRole }: TopBarProps) {
         />
       </div>
 
-      {/* Right section: Action buttons + User Menu */}
-      <div className="flex items-center gap-1">
+      {/* Right section: Action buttons + WebSocketStatus + User Menu */}
+      <div className="flex items-center gap-3">
+        <WebSocketStatus />
+
         {/* Bell icon button */}
         <button
           type="button"

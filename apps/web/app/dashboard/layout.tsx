@@ -6,6 +6,9 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { Sidebar } from '../../components/layout/Sidebar';
 import { TopBar } from '../../components/layout/TopBar';
+import { SocketProvider } from '../../components/providers/SocketProvider';
+
+const SIDEBAR_EXPANDED = 'var(--sidebar-width, 190px)';
 
 export default async function DashboardLayout({
   children,
@@ -23,21 +26,14 @@ export default async function DashboardLayout({
   }
 
   return (
-    <div className="min-h-screen flex bg-[#0D0F1A]">
-      {/* Fixed left sidebar */}
+    <div className="h-full flex">
       <Sidebar userRole={userRole} userEmail={userEmail} />
-
-      {/* Main content area — offset by dynamic sidebar width */}
-      <div
-        className="flex-1 flex flex-col transition-all duration-200"
-        style={{ paddingLeft: 'var(--sidebar-width, 190px)' }}
-      >
-        {/* Fixed top bar */}
+      <div className="flex-1 flex flex-col transition-all duration-200" style={{ paddingLeft: SIDEBAR_EXPANDED }}>
         <TopBar userEmail={userEmail} userRole={userRole} />
-
-        {/* Page content — below 48px top bar */}
-        <main className="flex-1 mt-[48px] p-6 overflow-auto">
-          {children}
+        <main className="flex-1 mt-14 p-6 overflow-auto">
+          <SocketProvider>
+            {children}
+          </SocketProvider>
         </main>
       </div>
     </div>

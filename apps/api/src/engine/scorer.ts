@@ -83,7 +83,7 @@ async function getActiveRules(): Promise<DbRule[]> {
 
   cacheLastRefreshed = now;
   console.log(
-    `✓ Rule cache refreshed — ${cachedRules.length} active rules loaded`,
+    `✅ Rule cache refreshed — ${cachedRules.length} active rules loaded`,
   );
 
   return cachedRules;

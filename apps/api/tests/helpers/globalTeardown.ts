@@ -13,9 +13,18 @@ export default async function globalTeardown(): Promise<void> {
   }
 
   try {
-    redisClient.disconnect();
-    redisPublisher.disconnect();
+    if (redisClient.status !== 'end') {
+      await redisClient.quit();
+    }
   } catch (err) {
-    // Ignore error if already disconnected
+    redisClient.disconnect();
+  }
+
+  try {
+    if (redisPublisher.status !== 'end') {
+      await redisPublisher.quit();
+    }
+  } catch (err) {
+    redisPublisher.disconnect();
   }
 }

@@ -12,6 +12,9 @@ export interface TestTokens {
   analystUser: any;
 }
 
+export const SEEDED_ADMIN_ID = '11111111-1111-1111-1111-111111111111';
+export const SEEDED_ANALYST_ID = '22222222-2222-2222-2222-222222222222';
+
 export async function ensureSeededUsers(db: Knex): Promise<void> {
   const existingAnalyst = await db('users').where({ email: 'analyst@fraudscope.dev' }).first();
   const existingAdmin = await db('users').where({ email: 'admin@fraudscope.dev' }).first();
@@ -21,6 +24,7 @@ export async function ensureSeededUsers(db: Knex): Promise<void> {
   if (!existingAnalyst) {
     const analystPasswordHash = await bcrypt.hash('analyst123', SALT_ROUNDS);
     await db('users').insert({
+      id: SEEDED_ANALYST_ID,
       email: 'analyst@fraudscope.dev',
       password_hash: analystPasswordHash,
       first_name: 'Sarah',
@@ -33,6 +37,7 @@ export async function ensureSeededUsers(db: Knex): Promise<void> {
   if (!existingAdmin) {
     const adminPasswordHash = await bcrypt.hash('admin123', SALT_ROUNDS);
     await db('users').insert({
+      id: SEEDED_ADMIN_ID,
       email: 'admin@fraudscope.dev',
       password_hash: adminPasswordHash,
       first_name: 'Marcus',

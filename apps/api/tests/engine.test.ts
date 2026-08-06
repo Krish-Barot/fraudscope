@@ -13,6 +13,7 @@
 import { evaluate, parameterSchema } from '../src/engine/rules/velocity';
 import { TransactionData, RuleContext } from '../src/engine/rules/types';
 import { evaluate as evaluateScorer, scoreToSeverity, invalidateRuleCache } from '../src/engine/scorer';
+import { closeConnections } from './helpers/testSetup';
 
 // ─────────────────────────────────────────
 // Mock Redis client
@@ -1932,6 +1933,5 @@ describe('composite scoring — FS-18 required', () => {
 });
 
 afterAll(async () => {
-  const { closeConnections } = await import('./helpers/testSetup');
   await closeConnections();
 });

@@ -50,7 +50,8 @@ export async function clearDatabase(db: Knex): Promise<void> {
       alert_rules,
       alerts,
       transactions,
-      rules
+      rules,
+      users
     RESTART IDENTITY CASCADE
   `);
   await ensureSeededUsers(db);
@@ -67,7 +68,15 @@ export async function closeConnections(db?: Knex): Promise<void> {
     await appDb.destroy();
   } catch (err) {}
   try {
+    await redisClient.quit();
+  } catch (err) {}
+  try {
     redisClient.disconnect();
+  } catch (err) {}
+  try {
+    await redisPublisher.quit();
+  } catch (err) {}
+  try {
     redisPublisher.disconnect();
   } catch (err) {}
 }

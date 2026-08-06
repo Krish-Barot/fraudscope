@@ -596,4 +596,8 @@ describe('DELETE /api/v1/rules/:id', () => {
       : auditLog.payload;
     expect(payload.name).toBe('To Be Deleted');
   });
+
+  afterAll(async () => {
+    await closeConnections(db);
+  });
 });

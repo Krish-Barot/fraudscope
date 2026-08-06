@@ -440,4 +440,8 @@ describe('GET /api/v1/transactions/:id', () => {
     expect(response.body.error.code).toBe('NOT_FOUND');
     expect(response.body.error.message).toContain(nonExistentId);
   });
+
+  afterAll(async () => {
+    await closeConnections(db);
+  });
 });

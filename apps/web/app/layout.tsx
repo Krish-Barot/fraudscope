@@ -10,24 +10,20 @@
 
 import type { Metadata } from 'next';
 import './globals.css';
+import { AuthProvider } from '../lib/authContext';
 
 export const metadata: Metadata = {
-  title: {
-    default: 'FraudScope',
-    template: '%s | FraudScope',
-  },
+  title: { default: 'FraudScope', template: '%s | FraudScope' },
   description: 'Real-time transaction fraud detection dashboard',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="h-full">
       <body className="h-full bg-slate-950 text-slate-100 antialiased">
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );

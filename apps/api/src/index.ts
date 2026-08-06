@@ -14,12 +14,15 @@ import { connectDatabase } from './config/database';
 import { requestIdMiddleware } from './middleware/requestId';
 import { errorHandler } from './middleware/errorHandler';
 import transactionRoutes from './modules/transactions/transaction.routes';
-import rulesRoutes from './engine/rules/rules.routes';
+import rulesRoutes from './modules/rules/rules.routes';
+import cookieParser from 'cookie-parser';
+import authRoutes from './modules/auth/auth.routes';
 
 const app = express();
 
 app.use(requestIdMiddleware);
 app.use(express.json());
+app.use(cookieParser());
 app.use(cors({
   origin: env.CORS_ORIGIN,
   credentials: true,
@@ -34,6 +37,9 @@ app.get('/health', (req, res) => {
     request_id: req.requestId,
   });
 });
+
+// Auth routes
+app.use('/api/v1/auth', authRoutes);
 
 app.use('/api/v1/transactions', transactionRoutes);
 app.use(errorHandler);

@@ -31,7 +31,7 @@ export const redisClient = new Redis(REDIS_URL, {
   },
 
   maxRetriesPerRequest: 3,
-  lazyConnect: false,
+  lazyConnect: true,
 });
 
 // Publisher client — only used for PUBLISH commands
@@ -39,7 +39,7 @@ export const redisClient = new Redis(REDIS_URL, {
 export const redisPublisher = new Redis(REDIS_URL, {
   retryStrategy: (times: number) => Math.min(times * 50, 2000),
   maxRetriesPerRequest: 3,
-  lazyConnect: false,
+  lazyConnect: true,
 });
 
 // Log connection events so you can see Redis status in Docker logs

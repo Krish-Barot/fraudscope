@@ -1,255 +1,509 @@
-import Link from 'next/link';
-import { TrendingDown, SlidersHorizontal } from 'lucide-react';
-import { AlertVolumeChart } from '../../components/dashboard/AlertVolumeChart';
-import { SeverityChart } from '../../components/dashboard/SeverityChart';
+// apps/web/app/dashboard/page.tsx
+// Live Transaction Feed — matches Stitch design
+'use client';
 
-const RECENT_ALERTS = [
-  { risk: 98, txId: '#TX-94021', amount: '$12,400.00', status: 'Pending', statusColor: '#F59E0B' },
-  { risk: 72, txId: '#TX-94019', amount: '$850.25',    status: 'Reviewing', statusColor: '#3882F6' },
-  { risk: 92, txId: '#TX-94015', amount: '$3,100.00',  status: 'Pending', statusColor: '#F59E0B' },
-];
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { Play, Pause, Radio, Filter } from 'lucide-react';
+import clsx from 'clsx';
+import { useAuth } from '../../lib/authContext';
+import { useSocket } from '../../hooks/useSocket';
+import { apiFetch } from '../lib/api';
+import { countryToFlag } from '../lib/countryFlags';
+import {
+  getSeverityFromScore,
+  SEVERITY_TEXT,
+  SEVERITY_BG,
+  SEVERITY_BORDER,
+  SEVERITY_HEX,
+  type Severity,
+} from '../lib/severity';
 
-const FLAGGED_ACCOUNTS = [
-  { id: 'ACC-8812-X', alerts: 12, vol: '$45.2k',  bars: ['30%', '50%', '75%', '100%'] },
-  { id: 'ACC-4491-Z', alerts: 9,  vol: '$22.1k',  bars: ['60%', '60%', '60%', '60%'] },
-  { id: 'ACC-1022-Q', alerts: 7,  vol: '$108.4k', bars: ['100%', '75%', '50%', '30%'] },
-];
+// ─────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────
+interface Transaction {
+  id: string;
+  external_id: string;
+  account_id: string;
+  amount: string | number;
+  currency: string;
+  merchant_name?: string;
+  country_code: string;
+  channel?: string;
+  status: 'clean' | 'flagged' | 'blocked';
+  created_at: string;
+  // Added by real-time event when alert exists
+  risk_score?: number;
+  severity?: Severity;
+}
 
-export default function DashboardPage() {
+type FilterMode = 'all' | 'flagged' | 'critical';
+
+// ─────────────────────────────────────────
+// Utility: format timestamp as HH:MM:SS
+// ─────────────────────────────────────────
+function formatTime(isoString: string): string {
+  try {
+    return new Date(isoString).toLocaleTimeString('en-CA', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return '--:--:--';
+  }
+}
+
+// ─────────────────────────────────────────
+// Utility: format amount
+// ─────────────────────────────────────────
+function formatAmount(amount: string | number, currency: string): string {
+  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
+  return new Intl.NumberFormat('en-CA', {
+    style: 'currency',
+    currency: currency || 'CAD',
+    minimumFractionDigits: 2,
+  }).format(num);
+}
+
+// ─────────────────────────────────────────
+// Utility: truncate transaction ID for display
+// e.g. "SIM-1234567890-abc12345" → "SIM-...abc12345"
+// ─────────────────────────────────────────
+function truncateTxId(id: string): string {
+  if (id.length <= 16) return id;
+  return `${id.slice(0, 6)}...${id.slice(-8)}`;
+}
+
+// ─────────────────────────────────────────
+// Status Badge component
+// ─────────────────────────────────────────
+function StatusBadge({ status, riskScore }: {
+  status: Transaction['status'];
+  riskScore?: number;
+}) {
+  if (status === 'clean' || !riskScore) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium font-mono bg-emerald-400/10 text-emerald-400">
+        CLEAN
+      </span>
+    );
+  }
+
+  const severity = getSeverityFromScore(riskScore);
+
   return (
-    <div className="min-w-[1230px] select-none">
-      {/* Section 1 — Metric cards row (4 cards, grid-cols-4, gap-4, mb-6) */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        {/* Card 1 — Transactions Today */}
-        <div className="bg-[#131929] border border-[#1E2535] rounded-[10px] px-6 py-5 h-[108px] flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-semibold tracking-widest text-[#8B8FA8] uppercase">
-              TRANSACTIONS TODAY
+    <span className={clsx(
+      'inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium font-mono',
+      SEVERITY_BG[severity],
+      SEVERITY_TEXT[severity]
+    )}>
+      {severity.toUpperCase()} {riskScore}
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────
+// Transaction Row component
+// ─────────────────────────────────────────
+function TransactionRow({
+  tx,
+  isNew,
+  onClick,
+}: {
+  tx: Transaction;
+  isNew: boolean;
+  onClick: () => void;
+}) {
+  const isFlagged = tx.status === 'flagged' || tx.status === 'blocked';
+  const severity = tx.risk_score
+    ? getSeverityFromScore(tx.risk_score)
+    : tx.status === 'flagged' ? 'medium' : 'clean';
+
+  const borderColor = isFlagged ? SEVERITY_HEX[severity] : 'transparent';
+  const amount = typeof tx.amount === 'string' ? parseFloat(tx.amount) : tx.amount;
+
+  return (
+    <tr
+      onClick={onClick}
+      className={clsx(
+        'group border-b border-[#1E2535] cursor-pointer transition-colors duration-150',
+        'hover:bg-white/[0.03]',
+        isNew && 'animate-fadeIn'
+      )}
+      style={{
+        // Left border for flagged transactions
+        boxShadow: isFlagged ? `inset 3px 0 0 ${borderColor}` : undefined,
+      }}
+    >
+      {/* Timestamp */}
+      <td className="py-2 pl-4 pr-3 whitespace-nowrap">
+        <span className="font-mono text-xs text-[#8B8FA8]">
+          {formatTime(tx.created_at)}
+        </span>
+      </td>
+
+      {/* Transaction ID */}
+      <td className="py-2 px-3 whitespace-nowrap">
+        <span className="font-mono text-xs text-[#F1F3FA] group-hover:text-blue-400 transition-colors">
+          {truncateTxId(tx.external_id)}
+        </span>
+      </td>
+
+      {/* Account ID */}
+      <td className="py-2 px-3 whitespace-nowrap">
+        <span className="font-mono text-xs text-[#8B8FA8]">
+          {tx.account_id}
+        </span>
+      </td>
+
+      {/* Amount */}
+      <td className="py-2 px-3 whitespace-nowrap text-right">
+        <span className={clsx(
+          'font-mono text-xs font-medium',
+          isFlagged ? SEVERITY_TEXT[severity] : 'text-[#F1F3FA]'
+        )}>
+          {formatAmount(amount, tx.currency)}
+        </span>
+      </td>
+
+      {/* Merchant */}
+      <td className="py-2 px-3">
+        <span className="text-xs text-[#8B8FA8] truncate block max-w-[120px]">
+          {tx.merchant_name || '—'}
+        </span>
+      </td>
+
+      {/* Country */}
+      <td className="py-2 px-3 whitespace-nowrap">
+        <span className="text-sm" title={tx.country_code}>
+          {countryToFlag(tx.country_code)}
+        </span>
+        <span className="ml-1 text-xs text-[#4A4F6A] font-mono">
+          {tx.country_code}
+        </span>
+      </td>
+
+      {/* Status */}
+      <td className="py-2 pl-3 pr-4 whitespace-nowrap">
+        <StatusBadge status={tx.status} riskScore={tx.risk_score} />
+      </td>
+    </tr>
+  );
+}
+
+// ─────────────────────────────────────────
+// Main Page Component
+// ─────────────────────────────────────────
+export default function LiveFeedPage() {
+  const router = useRouter();
+  const { getAccessToken } = useAuth();
+  const { connected, on, off, emit } = useSocket();
+
+  // ── State ──────────────────────────────────────────────────────
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isPaused, setIsPaused] = useState(false);
+  const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [newCountWhilePaused, setNewCountWhilePaused] = useState(0);
+
+  // Track which rows are "new" for the fade-in animation
+  const [newTxIds, setNewTxIds] = useState<Set<string>>(new Set());
+
+  // Buffer for transactions received while paused
+  const pauseBufferRef = useRef<Transaction[]>([]);
+
+  // ── Fetch initial transactions ─────────────────────────────────
+  useEffect(() => {
+    async function fetchInitial() {
+      setIsLoading(true);
+      try {
+        const token = getAccessToken();
+        const res = await apiFetch(
+          '/api/v1/transactions?limit=50&sort=created_at:desc',
+          {},
+          token
+        );
+
+        if (res.ok) {
+          const data = await res.json();
+          setTransactions(data.data || []);
+        }
+      } catch (err) {
+        console.error('Failed to fetch initial transactions:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    fetchInitial();
+  }, [getAccessToken]);
+
+  // ── Handle incoming transactions ───────────────────────────────
+  const handleNewTransaction = useCallback((txData: any) => {
+    const newTx: Transaction = {
+      id: txData.id,
+      external_id: txData.id, // live events use id as external reference
+      account_id: txData.account_id,
+      amount: txData.amount,
+      currency: txData.currency,
+      merchant_name: txData.merchant_name,
+      country_code: txData.country_code,
+      channel: txData.channel,
+      status: txData.status || 'clean',
+      created_at: txData.created_at || new Date().toISOString(),
+      risk_score: txData.risk_score,
+    };
+
+    if (isPaused) {
+      // Buffer while paused — don't update display
+      pauseBufferRef.current = [newTx, ...pauseBufferRef.current].slice(0, 200);
+      setNewCountWhilePaused(prev => prev + 1);
+      return;
+    }
+
+    // Add to display list, prepend, cap at 200
+    setTransactions(prev => {
+      const updated = [newTx, ...prev].slice(0, 200);
+      return updated;
+    });
+
+    // Mark as new for animation (remove after 1.5s)
+    setNewTxIds(prev => new Set([...prev, newTx.id]));
+    setTimeout(() => {
+      setNewTxIds(prev => {
+        const next = new Set(prev);
+        next.delete(newTx.id);
+        return next;
+      });
+    }, 1500);
+  }, [isPaused]);
+
+  // ── Handle alert updates (update existing tx severity) ─────────
+  const handleAlertNew = useCallback((alertData: any) => {
+    setTransactions(prev =>
+      prev.map(tx =>
+        tx.id === alertData.transaction_id
+          ? {
+              ...tx,
+              status: 'flagged' as const,
+              risk_score: alertData.risk_score,
+              severity: alertData.severity as Severity,
+            }
+          : tx
+      )
+    );
+  }, []);
+
+  // ── Subscribe to Socket.io events ──────────────────────────────
+  useEffect(() => {
+    if (!connected) return;
+
+    emit('subscribe', { channels: ['tx:live', 'alerts'] });
+    on('tx:new', handleNewTransaction);
+    on('alert:new', handleAlertNew);
+
+    return () => {
+      off('tx:new', handleNewTransaction);
+      off('alert:new', handleAlertNew);
+    };
+  }, [connected, on, off, emit, handleNewTransaction, handleAlertNew]);
+
+  // ── Pause / Play ───────────────────────────────────────────────
+  function handlePauseToggle() {
+    if (isPaused) {
+      // Resume — flush the buffer into the display list
+      if (pauseBufferRef.current.length > 0) {
+        setTransactions(prev => {
+          const combined = [...pauseBufferRef.current, ...prev].slice(0, 200);
+          pauseBufferRef.current = [];
+          return combined;
+        });
+      }
+      setNewCountWhilePaused(0);
+      setIsPaused(false);
+    } else {
+      setIsPaused(true);
+    }
+  }
+
+  // ── Filter transactions for display ───────────────────────────
+  const filteredTransactions = transactions.filter(tx => {
+    if (filterMode === 'all') return true;
+    if (filterMode === 'flagged') return tx.status === 'flagged' || tx.status === 'blocked';
+    if (filterMode === 'critical') {
+      return tx.risk_score !== undefined && getSeverityFromScore(tx.risk_score) === 'critical';
+    }
+    return true;
+  });
+
+  // ── Counts for filter tabs ─────────────────────────────────────
+  const flaggedCount = transactions.filter(
+    tx => tx.status === 'flagged' || tx.status === 'blocked'
+  ).length;
+
+  const criticalCount = transactions.filter(
+    tx => tx.risk_score !== undefined && getSeverityFromScore(tx.risk_score) === 'critical'
+  ).length;
+
+  // ─────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────
+  return (
+    <div className="flex flex-col h-full -m-6">
+
+      {/* ── Top Control Bar ──────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-6 py-3 border-b border-[#1E2535] bg-[#0D0F1A] shrink-0">
+
+        {/* Left: Title + live indicator */}
+        <div className="flex items-center gap-3">
+          <h1 className="text-sm font-semibold text-[#F1F3FA]">
+            Live Transaction Feed
+          </h1>
+          <div className="flex items-center gap-1.5">
+            <div className={clsx(
+              'w-1.5 h-1.5 rounded-full',
+              connected && !isPaused ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'
+            )} />
+            <span className="text-xs text-[#8B8FA8] font-mono">
+              {isPaused
+                ? `PAUSED — ${newCountWhilePaused} new`
+                : connected ? 'LIVE' : 'OFFLINE'
+              }
             </span>
           </div>
-          <div className="flex items-end justify-between mt-1">
-            <span className="text-[28px] font-semibold text-[#F1F3FA] font-mono leading-none">
-              12,847
-            </span>
-            {/* Mini bar chart */}
-            <div className="flex items-end gap-[3px] h-[24px]">
-              {['60%', '40%', '75%', '55%', '85%', '70%'].map((height, i) => (
-                <div
-                  key={i}
-                  className="w-[6px] rounded-[2px]"
-                  style={{
-                    height,
-                    backgroundColor: i % 2 === 0 ? '#3882F6' : '#1E3A5F',
-                  }}
-                />
-              ))}
-            </div>
-          </div>
         </div>
 
-        {/* Card 2 — Alerts Generated */}
-        <div className="bg-[#131929] border border-[#1E2535] rounded-[10px] px-6 py-5 h-[108px] flex flex-col justify-between">
-          <span className="text-[10px] font-semibold tracking-widest text-[#8B8FA8] uppercase">
-            ALERTS GENERATED
-          </span>
-          <div className="flex items-end justify-between mt-1">
-            <span className="text-[28px] font-semibold text-[#F1F3FA] font-mono leading-none">
-              23
-            </span>
-            {/* 6 dots row */}
-            <div className="flex items-center gap-[4px] mb-1">
-              {['#FF6B6B', '#FF6B6B', '#F59E0B', '#F59E0B', '#3882F6', '#3882F6'].map((color, i) => (
-                <span
-                  key={i}
-                  className="w-[8px] h-[8px] rounded-full"
-                  style={{ backgroundColor: color }}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Card 3 — Pending Review */}
-        <div className="bg-[#131929] border border-[#1E2535] border-l-[3px] border-l-[#D16900] rounded-[10px] px-6 py-5 h-[108px] flex flex-col justify-between">
-          <span className="text-[10px] font-semibold tracking-widest text-[#D16900] uppercase">
-            PENDING REVIEW
-          </span>
-          <div className="flex items-baseline justify-between mt-1">
-            <span className="text-[28px] font-semibold text-[#D16900] font-mono leading-none">
-              8
-            </span>
-            <span className="text-[11px] text-[#D16900] opacity-80 font-medium">
-              Requires immediate analyst action
-            </span>
-          </div>
-        </div>
-
-        {/* Card 4 — Avg Response Time */}
-        <div className="bg-[#131929] border border-[#1E2535] rounded-[10px] px-6 py-5 h-[108px] flex flex-col justify-between">
-          <span className="text-[10px] font-semibold tracking-widest text-[#8B8FA8] uppercase">
-            AVG RESPONSE TIME
-          </span>
-          <div className="flex items-baseline justify-between mt-1">
-            <span className="text-[28px] font-semibold text-[#F1F3FA] font-mono leading-none">
-              4m 32s
-            </span>
-            <div className="flex items-center gap-1 text-[11px] text-[#22C55E] font-medium">
-              <TrendingDown size={12} className="text-[#22C55E]" />
-              <span>+12% from avg</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Section 2 — Charts row (grid-cols-5, gap-4, mb-6) */}
-      <div className="grid grid-cols-5 gap-4 mb-6">
-        <div className="col-span-3">
-          <AlertVolumeChart />
-        </div>
-        <div className="col-span-2">
-          <SeverityChart />
-        </div>
-      </div>
-
-      {/* Section 3 — Bottom row (grid-cols-2, gap-4) */}
-      <div className="grid grid-cols-2 gap-4">
-        {/* Left card: Recent Alerts */}
-        <div className="bg-[#131929] border border-[#1E2535] rounded-[10px] p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-[14px] font-medium text-[#F1F3FA]">
-              Recent Alerts
-            </h3>
-            <Link
-              href="/dashboard/alerts"
-              className="text-[12px] text-[#3882F6] hover:underline"
-            >
-              View All
-            </Link>
-          </div>
-
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-[#1E2535] text-[11px] font-semibold uppercase text-[#8B8FA8]">
-                <th className="pb-2 font-normal">Risk</th>
-                <th className="pb-2 font-normal">Tx ID</th>
-                <th className="pb-2 font-normal">Amount</th>
-                <th className="pb-2 font-normal">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {RECENT_ALERTS.map((row, idx) => {
-                const isHighRisk = row.risk >= 80;
-                const isMedRisk = row.risk >= 60 && row.risk < 80;
-
-                const badgeBg = isHighRisk
-                  ? 'rgba(255,107,107,0.15)'
-                  : isMedRisk
-                  ? 'rgba(245,158,11,0.15)'
-                  : 'rgba(56,130,246,0.15)';
-
-                const badgeText = isHighRisk
-                  ? '#FF6B6B'
-                  : isMedRisk
-                  ? '#F59E0B'
-                  : '#3882F6';
-
-                return (
-                  <tr
-                    key={idx}
-                    className="h-[40px] border-b border-[#0D0F1A] hover:bg-[rgba(255,255,255,0.02)] transition-colors duration-150"
-                  >
-                    <td>
-                      <span
-                        className="inline-flex items-center justify-center w-[28px] h-[20px] rounded text-[12px] font-mono font-medium"
-                        style={{ backgroundColor: badgeBg, color: badgeText }}
-                      >
-                        {row.risk}
-                      </span>
-                    </td>
-                    <td className="text-[13px] font-mono text-[#F1F3FA]">
-                      {row.txId}
-                    </td>
-                    <td className="text-[13px] font-mono text-[#F1F3FA]">
-                      {row.amount}
-                    </td>
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="w-[8px] h-[8px] rounded-full shrink-0"
-                          style={{ backgroundColor: row.statusColor }}
-                        />
-                        <span className="text-[13px] text-[#8B8FA8]">
-                          {row.status}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Right card: Top Flagged Accounts */}
-        <div className="bg-[#131929] border border-[#1E2535] rounded-[10px] p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-[14px] font-medium text-[#F1F3FA]">
-              Top Flagged Accounts
-            </h3>
+        {/* Center: Filter tabs */}
+        <div className="flex items-center gap-1 bg-[#131929] rounded-lg p-1 border border-[#1E2535]">
+          {([ 
+            { mode: 'all' as FilterMode,      label: 'ALL',      count: transactions.length },
+            { mode: 'flagged' as FilterMode,  label: 'FLAGGED',  count: flaggedCount },
+            { mode: 'critical' as FilterMode, label: 'CRITICAL', count: criticalCount },
+          ]).map(({ mode, label, count }) => (
             <button
-              type="button"
-              aria-label="Filter accounts"
-              className="text-[#8B8FA8] hover:text-[#F1F3FA] transition-colors duration-150"
+              key={mode}
+              onClick={() => setFilterMode(mode)}
+              className={clsx(
+                'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium font-mono transition-colors',
+                filterMode === mode
+                  ? 'bg-[#3882F6] text-white'
+                  : 'text-[#8B8FA8] hover:text-[#F1F3FA] hover:bg-white/5'
+              )}
             >
-              <SlidersHorizontal size={14} />
+              {label}
+              <span className={clsx(
+                'text-xs rounded px-1',
+                filterMode === mode
+                  ? 'bg-white/20 text-white'
+                  : 'bg-[#1E2535] text-[#4A4F6A]'
+              )}>
+                {count}
+              </span>
             </button>
-          </div>
+          ))}
+        </div>
 
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-[#1E2535] text-[11px] font-semibold uppercase text-[#8B8FA8]">
-                <th className="pb-2 font-normal">Account ID</th>
-                <th className="pb-2 font-normal">Alerts</th>
-                <th className="pb-2 font-normal">Total Vol.</th>
-                <th className="pb-2 font-normal">Trend</th>
+        {/* Right: Pause/Play button */}
+        <div className="flex items-center gap-2">
+          {isPaused && newCountWhilePaused > 0 && (
+            <span className="text-xs text-amber-400 font-mono animate-pulse">
+              +{newCountWhilePaused} waiting
+            </span>
+          )}
+          <button
+            onClick={handlePauseToggle}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border',
+              isPaused
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                : 'bg-[#131929] border-[#1E2535] text-[#8B8FA8] hover:text-[#F1F3FA] hover:bg-white/5'
+            )}
+          >
+            {isPaused
+              ? <><Play size={12} /> Resume</>
+              : <><Pause size={12} /> Pause</>
+            }
+          </button>
+        </div>
+      </div>
+
+      {/* ── Table ────────────────────────────────────────────────── */}
+      <div className="flex-1 overflow-auto">
+        {isLoading ? (
+          // Loading skeleton
+          <div className="p-6 space-y-2">
+            {Array.from({ length: 15 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-9 bg-[#131929] rounded animate-pulse"
+                style={{ opacity: 1 - i * 0.05 }}
+              />
+            ))}
+          </div>
+        ) : (
+          <table className="w-full border-collapse">
+            {/* Table header */}
+            <thead className="sticky top-0 z-10 bg-[#0D0F1A] border-b border-[#1E2535]">
+              <tr>
+                {[
+                  { label: 'TIME',        className: 'pl-4 pr-3 w-24' },
+                  { label: 'TX ID',       className: 'px-3 w-40' },
+                  { label: 'ACCOUNT',     className: 'px-3 w-32' },
+                  { label: 'AMOUNT',      className: 'px-3 w-28 text-right' },
+                  { label: 'MERCHANT',    className: 'px-3' },
+                  { label: 'COUNTRY',     className: 'px-3 w-24' },
+                  { label: 'STATUS',      className: 'pl-3 pr-4 w-32' },
+                ].map(col => (
+                  <th
+                    key={col.label}
+                    className={clsx(
+                      'py-2.5 text-left text-xs font-semibold text-[#4A4F6A] tracking-widest',
+                      col.className
+                    )}
+                  >
+                    {col.label}
+                  </th>
+                ))}
               </tr>
             </thead>
+
             <tbody>
-              {FLAGGED_ACCOUNTS.map((row) => (
-                <tr
-                  key={row.id}
-                  className="h-[40px] border-b border-[#0D0F1A] hover:bg-[rgba(255,255,255,0.02)] transition-colors duration-150"
-                >
-                  <td className="text-[13px] font-mono text-[#F1F3FA]">
-                    {row.id}
-                  </td>
-                  <td className="text-[13px] font-mono text-[#F1F3FA]">
-                    {row.alerts}
-                  </td>
-                  <td className="text-[13px] font-mono text-[#F1F3FA]">
-                    {row.vol}
-                  </td>
-                  <td>
-                    {/* Inline mini bar chart showing trend */}
-                    <div className="flex items-end gap-[2px] h-[16px]">
-                      {row.bars.map((h, i) => (
-                        <div
-                          key={i}
-                          className="w-[4px] rounded-[1px]"
-                          style={{
-                            height: h,
-                            backgroundColor:
-                              i === row.bars.length - 1 ? '#60A5FA' : '#3882F6',
-                          }}
-                        />
-                      ))}
-                    </div>
+              {filteredTransactions.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="text-center py-16 text-[#4A4F6A] text-sm">
+                    {filterMode === 'all'
+                      ? 'Waiting for transactions...'
+                      : `No ${filterMode} transactions`
+                    }
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredTransactions.map(tx => (
+                  <TransactionRow
+                    key={tx.id}
+                    tx={tx}
+                    isNew={newTxIds.has(tx.id)}
+                    onClick={() => router.push(`/dashboard/transactions/${tx.id}`)}
+                  />
+                ))
+              )}
             </tbody>
           </table>
-        </div>
+        )}
+      </div>
+
+      {/* ── Footer status bar ─────────────────────────────────────── */}
+      <div className="shrink-0 px-6 py-2 border-t border-[#1E2535] bg-[#0D0F1A] flex items-center justify-between">
+        <span className="text-xs text-[#4A4F6A] font-mono">
+          Showing {filteredTransactions.length} of {transactions.length} transactions
+          {filterMode !== 'all' && ` (${filterMode} filter active)`}
+        </span>
+        <span className="text-xs text-[#4A4F6A] font-mono">
+          Cap: {transactions.length}/200
+        </span>
       </div>
     </div>
   );

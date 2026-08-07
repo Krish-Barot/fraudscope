@@ -39,3 +39,18 @@ body {
 * {
   box-sizing: border-box;
 }
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    background-color: rgba(56, 130, 246, 0.08);
+  }
+  to {
+    opacity: 1;
+    background-color: transparent;
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 1.5s ease-out forwards;
+}

@@ -7,8 +7,9 @@ import { redirect } from 'next/navigation';
 import { Sidebar } from '../../components/layout/Sidebar';
 import { TopBar } from '../../components/layout/TopBar';
 import { SocketProvider } from '../../components/providers/SocketProvider';
+import { ToastProvider } from '../../components/ui/Toast';
 
-const SIDEBAR_EXPANDED = 'var(--sidebar-width, 190px)';
+const SIDEBAR_EXPANDED = 'var(--sidebar-width, 240px)';
 
 export default async function DashboardLayout({
   children,
@@ -32,7 +33,9 @@ export default async function DashboardLayout({
         <TopBar userEmail={userEmail} userRole={userRole} />
         <main className="flex-1 mt-14 p-6 overflow-auto">
           <SocketProvider>
-            {children}
+            <ToastProvider>
+              {children}
+            </ToastProvider>
           </SocketProvider>
         </main>
       </div>

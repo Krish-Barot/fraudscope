@@ -218,3 +218,60 @@ export async function getTransactionById(id: string) {
     account_history: accountHistory,
   };
 }
+
+export async function searchGlobalService(queryStr: string) {
+  const q = queryStr.trim();
+  if (!q) {
+    return { transactions: [], accounts: [] };
+  }
+
+  const term = `%${q}%`;
+
+  // 1. Search transactions (matching external_id, id::text, account_id, merchant_name)
+  const transactions = await db('transactions')
+    .where(function() {
+      this.where('external_id', 'ilike', term)
+          .orWhere('account_id', 'ilike', term)
+          .orWhere('merchant_name', 'ilike', term)
+          .orWhere(db.raw('id::text ILIKE ?', [term]));
+    })
+    .orderBy('created_at', 'desc')
+    .limit(5)
+    .select('id', 'external_id', 'account_id', 'amount', 'currency', 'merchant_name', 'status', 'created_at');
+
+  // 2. Search accounts matching account_id
+  const matchingAccountsRaw = await db('transactions')
+    .where('account_id', 'ilike', term)
+    .select('account_id')
+    .count('id as transaction_count')
+    .groupBy('account_id')
+    .orderByRaw('count(id) desc')
+    .limit(5);
+
+  const accountIds = matchingAccountsRaw.map((a) => a.account_id);
+
+  let alertCountsMap: Record<string, number> = {};
+  if (accountIds.length > 0) {
+    const alertRows = await db('alerts')
+      .join('transactions', 'alerts.transaction_id', 'transactions.id')
+      .whereIn('transactions.account_id', accountIds)
+      .select('transactions.account_id')
+      .count('alerts.id as alert_count')
+      .groupBy('transactions.account_id');
+
+    alertRows.forEach((r: any) => {
+      alertCountsMap[r.account_id] = parseInt(r.alert_count as string, 10);
+    });
+  }
+
+  const accounts = matchingAccountsRaw.map((a: any) => ({
+    account_id: a.account_id,
+    transaction_count: parseInt(a.transaction_count as string, 10),
+    alert_count: alertCountsMap[a.account_id] || 0,
+  }));
+
+  return {
+    transactions,
+    accounts,
+  };
+}

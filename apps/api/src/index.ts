@@ -11,6 +11,7 @@ import { errorHandler } from './middleware/errorHandler';
 import authRoutes from './modules/auth/auth.routes';
 import transactionRoutes from './modules/transactions/transaction.routes';
 import rulesRoutes from './modules/rules/rules.routes';
+import alertsRoutes from './modules/alerts/alerts.routes';
 import { setupWebSocket } from './websocket/index';  // ← NEW
 
 const app = express();
@@ -37,6 +38,7 @@ app.get('/health', (req, res) => {
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/transactions', transactionRoutes);
 app.use('/api/v1/rules', rulesRoutes);
+app.use('/api/v1/alerts', alertsRoutes);
 
 app.use(errorHandler);
 

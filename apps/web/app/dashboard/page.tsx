@@ -1,509 +1,621 @@
 // apps/web/app/dashboard/page.tsx
-// Live Transaction Feed — matches Stitch design
+// Dashboard Overview — matches Stitch design with real-time Socket.IO updates
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { Play, Pause, Radio, Filter } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
+import {
+  Activity,
+  AlertTriangle,
+  Clock,
+  ShieldAlert,
+  TrendingUp,
+  ArrowUpRight,
+  ChevronRight,
+  UserX,
+} from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../lib/authContext';
 import { useSocket } from '../../hooks/useSocket';
 import { apiFetch } from '../lib/api';
-import { countryToFlag } from '../lib/countryFlags';
 import {
   getSeverityFromScore,
   SEVERITY_TEXT,
   SEVERITY_BG,
-  SEVERITY_BORDER,
-  SEVERITY_HEX,
   type Severity,
 } from '../lib/severity';
 
-// ─────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────
-interface Transaction {
+interface AlertItem {
   id: string;
-  external_id: string;
-  account_id: string;
-  amount: string | number;
-  currency: string;
-  merchant_name?: string;
-  country_code: string;
-  channel?: string;
-  status: 'clean' | 'flagged' | 'blocked';
+  transaction_id: string;
+  risk_score: number;
+  severity: Severity;
+  status: string;
+  summary: string;
   created_at: string;
-  // Added by real-time event when alert exists
-  risk_score?: number;
-  severity?: Severity;
+  transaction?: {
+    account_id?: string;
+    amount?: number | string;
+    currency?: string;
+    merchant_name?: string;
+  };
 }
 
-type FilterMode = 'all' | 'flagged' | 'critical';
-
-// ─────────────────────────────────────────
-// Utility: format timestamp as HH:MM:SS
-// ─────────────────────────────────────────
-function formatTime(isoString: string): string {
-  try {
-    return new Date(isoString).toLocaleTimeString('en-CA', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
-  } catch {
-    return '--:--:--';
-  }
+interface AlertCounts {
+  total?: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  new: number;
+  reviewing: number;
+  investigating: number;
+  dismissed_today?: number;
+  escalated_today?: number;
 }
 
-// ─────────────────────────────────────────
-// Utility: format amount
-// ─────────────────────────────────────────
-function formatAmount(amount: string | number, currency: string): string {
-  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  return new Intl.NumberFormat('en-CA', {
-    style: 'currency',
-    currency: currency || 'CAD',
-    minimumFractionDigits: 2,
-  }).format(num);
+interface FlaggedAccount {
+  accountId: string;
+  count: number;
+  maxScore: number;
 }
 
-// ─────────────────────────────────────────
-// Utility: truncate transaction ID for display
-// e.g. "SIM-1234567890-abc12345" → "SIM-...abc12345"
-// ─────────────────────────────────────────
-function truncateTxId(id: string): string {
-  if (id.length <= 16) return id;
-  return `${id.slice(0, 6)}...${id.slice(-8)}`;
-}
+// Initial 24-hour volume baseline
+const INITIAL_VOLUME = [12, 24, 18, 45, 30, 80, 55, 65, 40, 50, 75, 35, 60, 85, 45, 55, 70, 40, 30, 50, 65, 75, 90, 60];
 
-// ─────────────────────────────────────────
-// Status Badge component
-// ─────────────────────────────────────────
-function StatusBadge({ status, riskScore }: {
-  status: Transaction['status'];
-  riskScore?: number;
-}) {
-  if (status === 'clean' || !riskScore) {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium font-mono bg-emerald-400/10 text-emerald-400">
-        CLEAN
-      </span>
-    );
-  }
-
-  const severity = getSeverityFromScore(riskScore);
-
-  return (
-    <span className={clsx(
-      'inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium font-mono',
-      SEVERITY_BG[severity],
-      SEVERITY_TEXT[severity]
-    )}>
-      {severity.toUpperCase()} {riskScore}
-    </span>
-  );
-}
-
-// ─────────────────────────────────────────
-// Transaction Row component
-// ─────────────────────────────────────────
-function TransactionRow({
-  tx,
-  isNew,
-  onClick,
-}: {
-  tx: Transaction;
-  isNew: boolean;
-  onClick: () => void;
-}) {
-  const isFlagged = tx.status === 'flagged' || tx.status === 'blocked';
-  const severity = tx.risk_score
-    ? getSeverityFromScore(tx.risk_score)
-    : tx.status === 'flagged' ? 'medium' : 'clean';
-
-  const borderColor = isFlagged ? SEVERITY_HEX[severity] : 'transparent';
-  const amount = typeof tx.amount === 'string' ? parseFloat(tx.amount) : tx.amount;
-
-  return (
-    <tr
-      onClick={onClick}
-      className={clsx(
-        'group border-b border-[#1E2535] cursor-pointer transition-colors duration-150',
-        'hover:bg-white/[0.03]',
-        isNew && 'animate-fadeIn'
-      )}
-      style={{
-        // Left border for flagged transactions
-        boxShadow: isFlagged ? `inset 3px 0 0 ${borderColor}` : undefined,
-      }}
-    >
-      {/* Timestamp */}
-      <td className="py-2 pl-4 pr-3 whitespace-nowrap">
-        <span className="font-mono text-xs text-[#8B8FA8]">
-          {formatTime(tx.created_at)}
-        </span>
-      </td>
-
-      {/* Transaction ID */}
-      <td className="py-2 px-3 whitespace-nowrap">
-        <span className="font-mono text-xs text-[#F1F3FA] group-hover:text-blue-400 transition-colors">
-          {truncateTxId(tx.external_id)}
-        </span>
-      </td>
-
-      {/* Account ID */}
-      <td className="py-2 px-3 whitespace-nowrap">
-        <span className="font-mono text-xs text-[#8B8FA8]">
-          {tx.account_id}
-        </span>
-      </td>
-
-      {/* Amount */}
-      <td className="py-2 px-3 whitespace-nowrap text-right">
-        <span className={clsx(
-          'font-mono text-xs font-medium',
-          isFlagged ? SEVERITY_TEXT[severity] : 'text-[#F1F3FA]'
-        )}>
-          {formatAmount(amount, tx.currency)}
-        </span>
-      </td>
-
-      {/* Merchant */}
-      <td className="py-2 px-3">
-        <span className="text-xs text-[#8B8FA8] truncate block max-w-[120px]">
-          {tx.merchant_name || '—'}
-        </span>
-      </td>
-
-      {/* Country */}
-      <td className="py-2 px-3 whitespace-nowrap">
-        <span className="text-sm" title={tx.country_code}>
-          {countryToFlag(tx.country_code)}
-        </span>
-        <span className="ml-1 text-xs text-[#4A4F6A] font-mono">
-          {tx.country_code}
-        </span>
-      </td>
-
-      {/* Status */}
-      <td className="py-2 pl-3 pr-4 whitespace-nowrap">
-        <StatusBadge status={tx.status} riskScore={tx.risk_score} />
-      </td>
-    </tr>
-  );
-}
-
-// ─────────────────────────────────────────
-// Main Page Component
-// ─────────────────────────────────────────
-export default function LiveFeedPage() {
-  const router = useRouter();
-  const { getAccessToken } = useAuth();
+export default function DashboardOverviewPage() {
+  const { accessToken, isLoading: isAuthLoading } = useAuth();
   const { connected, on, off, emit } = useSocket();
 
-  // ── State ──────────────────────────────────────────────────────
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isPaused, setIsPaused] = useState(false);
-  const [filterMode, setFilterMode] = useState<FilterMode>('all');
-  const [newCountWhilePaused, setNewCountWhilePaused] = useState(0);
+  const [recentAlerts, setRecentAlerts] = useState<AlertItem[]>([]);
+  const [totalTransactions, setTotalTransactions] = useState<number | null>(null);
+  const [topAccounts, setTopAccounts] = useState<FlaggedAccount[]>([]);
+  const [volumeBuckets, setVolumeBuckets] = useState<number[]>(INITIAL_VOLUME);
+  const [alertCounts, setAlertCounts] = useState<AlertCounts>({
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    new: 0,
+    reviewing: 0,
+    investigating: 0,
+  });
 
-  // Track which rows are "new" for the fade-in animation
-  const [newTxIds, setNewTxIds] = useState<Set<string>>(new Set());
+  const processedAlertIdsRef = useRef<Set<string>>(new Set());
 
-  // Buffer for transactions received while paused
-  const pauseBufferRef = useRef<Transaction[]>([]);
+  // ── Initial API Load ──────────────────────────────────────────────
+  const loadDashboardData = useCallback(async () => {
+    if (isAuthLoading) return;
 
-  // ── Fetch initial transactions ─────────────────────────────────
-  useEffect(() => {
-    async function fetchInitial() {
-      setIsLoading(true);
-      try {
-        const token = getAccessToken();
-        const res = await apiFetch(
-          '/api/v1/transactions?limit=50&sort=created_at:desc',
-          {},
-          token
-        );
-
-        if (res.ok) {
-          const data = await res.json();
-          setTransactions(data.data || []);
-        }
-      } catch (err) {
-        console.error('Failed to fetch initial transactions:', err);
-      } finally {
-        setIsLoading(false);
+    setIsLoading(true);
+    try {
+      // 1. Fetch alert counts
+      const countsRes = await apiFetch('/api/v1/alerts/counts');
+      if (countsRes.ok) {
+        const countsData = await countsRes.json();
+        setAlertCounts({
+          critical: 0,
+          high: 0,
+          medium: 0,
+          low: 0,
+          new: 0,
+          reviewing: 0,
+          investigating: 0,
+          total: 0,
+          ...countsData,
+        });
       }
+
+      // 2. Fetch recent alerts (top 5 sorted by created_at)
+      const alertsRes = await apiFetch('/api/v1/alerts?limit=10&sort=created_at:desc');
+      if (alertsRes.ok) {
+        const alertsData = await alertsRes.json();
+        const alertList: AlertItem[] = alertsData.data || [];
+        setRecentAlerts(alertList.slice(0, 5));
+
+        if (alertsData.pagination?.total !== undefined) {
+          setAlertCounts(prev => ({ ...prev, total: alertsData.pagination.total }));
+        }
+
+        // Derive top flagged accounts from initial alerts
+        const map = new Map<string, { accountId: string; count: number; maxScore: number }>();
+        alertList.forEach((alert) => {
+          const accId = alert.transaction?.account_id || 'ACC-UNKNOWN';
+          const existing = map.get(accId) || { accountId: accId, count: 0, maxScore: 0 };
+          map.set(accId, {
+            accountId: accId,
+            count: existing.count + 1,
+            maxScore: Math.max(existing.maxScore, alert.risk_score || 0),
+          });
+        });
+
+        const derivedAccounts = Array.from(map.values())
+          .sort((a, b) => b.maxScore - a.maxScore)
+          .slice(0, 4);
+        setTopAccounts(derivedAccounts);
+      }
+
+      // 3. Fetch transaction count
+      const txRes = await apiFetch('/api/v1/transactions?limit=1');
+      if (txRes.ok) {
+        const txData = await txRes.json();
+        if (txData.pagination?.total !== undefined) {
+          setTotalTransactions(txData.pagination.total);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch dashboard overview data:', err);
+    } finally {
+      setIsLoading(false);
     }
+  }, [isAuthLoading]);
 
-    fetchInitial();
-  }, [getAccessToken]);
+  useEffect(() => {
+    loadDashboardData();
+  }, [loadDashboardData, accessToken, isAuthLoading]);
 
-  // ── Handle incoming transactions ───────────────────────────────
-  const handleNewTransaction = useCallback((txData: any) => {
-    const newTx: Transaction = {
-      id: txData.id,
-      external_id: txData.id, // live events use id as external reference
-      account_id: txData.account_id,
-      amount: txData.amount,
-      currency: txData.currency,
-      merchant_name: txData.merchant_name,
-      country_code: txData.country_code,
-      channel: txData.channel,
-      status: txData.status || 'clean',
-      created_at: txData.created_at || new Date().toISOString(),
-      risk_score: txData.risk_score,
-    };
+  // ── Real-Time Socket.IO Handlers ───────────────────────────────────
+  const handleNewTx = useCallback((_txData: any) => {
+    // 1. Increment Transactions Today
+    setTotalTransactions(prev => (prev !== null ? prev + 1 : 1));
 
-    if (isPaused) {
-      // Buffer while paused — don't update display
-      pauseBufferRef.current = [newTx, ...pauseBufferRef.current].slice(0, 200);
-      setNewCountWhilePaused(prev => prev + 1);
-      return;
-    }
-
-    // Add to display list, prepend, cap at 200
-    setTransactions(prev => {
-      const updated = [newTx, ...prev].slice(0, 200);
+    // 2. Increment volume in current hour bucket
+    setVolumeBuckets(prev => {
+      const updated = [...prev];
+      updated[23] = (updated[23] || 0) + 1;
       return updated;
     });
-
-    // Mark as new for animation (remove after 1.5s)
-    setNewTxIds(prev => new Set([...prev, newTx.id]));
-    setTimeout(() => {
-      setNewTxIds(prev => {
-        const next = new Set(prev);
-        next.delete(newTx.id);
-        return next;
-      });
-    }, 1500);
-  }, [isPaused]);
-
-  // ── Handle alert updates (update existing tx severity) ─────────
-  const handleAlertNew = useCallback((alertData: any) => {
-    setTransactions(prev =>
-      prev.map(tx =>
-        tx.id === alertData.transaction_id
-          ? {
-              ...tx,
-              status: 'flagged' as const,
-              risk_score: alertData.risk_score,
-              severity: alertData.severity as Severity,
-            }
-          : tx
-      )
-    );
   }, []);
 
-  // ── Subscribe to Socket.io events ──────────────────────────────
+  const handleNewAlert = useCallback((alertData: any) => {
+    if (!alertData || !alertData.id) return;
+
+    // Deduplicate alert processing
+    if (processedAlertIdsRef.current.has(alertData.id)) {
+      return;
+    }
+    processedAlertIdsRef.current.add(alertData.id);
+
+    const sev = (alertData.severity || getSeverityFromScore(alertData.risk_score)) as Severity;
+    const status = alertData.status || 'new';
+
+    // 1. Update Alert Counts safely
+    setAlertCounts(prev => {
+      const copy: any = { ...prev };
+      ['critical', 'high', 'medium', 'low', 'new', 'reviewing', 'investigating', 'total'].forEach(k => {
+        if (copy[k] === undefined) copy[k] = 0;
+      });
+
+      copy.total = (copy.total || 0) + 1;
+      if (['critical', 'high', 'medium', 'low'].includes(sev)) {
+        copy[sev] = (copy[sev] || 0) + 1;
+      }
+      if (['new', 'reviewing', 'investigating'].includes(status)) {
+        copy[status] = (copy[status] || 0) + 1;
+      }
+      return copy;
+    });
+
+    // 2. Prepend to Recent Alerts (max 5 items, prevent duplicate IDs)
+    const newAlert: AlertItem = {
+      id: alertData.id,
+      transaction_id: alertData.transaction_id,
+      risk_score: alertData.risk_score,
+      severity: sev,
+      status: status,
+      summary: alertData.summary || `High Risk Alert (${alertData.risk_score} score)`,
+      created_at: alertData.created_at || new Date().toISOString(),
+      transaction: alertData.transaction ? {
+        account_id: alertData.transaction.account_id,
+        amount: alertData.transaction.amount,
+        currency: alertData.transaction.currency,
+        merchant_name: alertData.transaction.merchant_name,
+      } : undefined,
+    };
+
+    setRecentAlerts(prev => {
+      const filtered = prev.filter(a => a.id !== newAlert.id);
+      return [newAlert, ...filtered].slice(0, 5);
+    });
+
+    // 3. Update Top Flagged Accounts
+    const accId = alertData.transaction?.account_id;
+    if (accId) {
+      setTopAccounts(prev => {
+        const idx = prev.findIndex(a => a.accountId === accId);
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = {
+            ...copy[idx],
+            count: copy[idx].count + 1,
+            maxScore: Math.max(copy[idx].maxScore, alertData.risk_score || 0),
+          };
+          return copy.sort((a, b) => b.maxScore - a.maxScore).slice(0, 4);
+        } else {
+          const copy = [
+            ...prev,
+            { accountId: accId, count: 1, maxScore: alertData.risk_score || 0 },
+          ];
+          return copy.sort((a, b) => b.maxScore - a.maxScore).slice(0, 4);
+        }
+      });
+    }
+
+    // 4. Increment volume in current hour bucket
+    setVolumeBuckets(prev => {
+      const updated = [...prev];
+      updated[23] = (updated[23] || 0) + 1;
+      return updated;
+    });
+  }, []);
+
+  const handleAlertUpdated = useCallback((updateData: any) => {
+    if (!updateData?.alert_id) return;
+    const { alert_id, new_status } = updateData;
+
+    // Update status in recent alerts list
+    setRecentAlerts(prev =>
+      prev.map(alert =>
+        alert.id === alert_id ? { ...alert, status: new_status } : alert
+      )
+    );
+
+    // Refresh counts from backend to keep status counts perfectly accurate
+    apiFetch('/api/v1/alerts/counts').then(res => {
+      if (res.ok) res.json().then(data => setAlertCounts(data));
+    });
+  }, []);
+
+  // ── Subscribe to Socket Rooms ──────────────────────────────────────
   useEffect(() => {
     if (!connected) return;
 
     emit('subscribe', { channels: ['tx:live', 'alerts'] });
-    on('tx:new', handleNewTransaction);
-    on('alert:new', handleAlertNew);
+    on('tx:new', handleNewTx);
+    on('alert:new', handleNewAlert);
+    on('alert:updated', handleAlertUpdated);
 
     return () => {
-      off('tx:new', handleNewTransaction);
-      off('alert:new', handleAlertNew);
+      off('tx:new', handleNewTx);
+      off('alert:new', handleNewAlert);
+      off('alert:updated', handleAlertUpdated);
     };
-  }, [connected, on, off, emit, handleNewTransaction, handleAlertNew]);
+  }, [connected, emit, on, off, handleNewTx, handleNewAlert, handleAlertUpdated]);
 
-  // ── Pause / Play ───────────────────────────────────────────────
-  function handlePauseToggle() {
-    if (isPaused) {
-      // Resume — flush the buffer into the display list
-      if (pauseBufferRef.current.length > 0) {
-        setTransactions(prev => {
-          const combined = [...pauseBufferRef.current, ...prev].slice(0, 200);
-          pauseBufferRef.current = [];
-          return combined;
-        });
-      }
-      setNewCountWhilePaused(0);
-      setIsPaused(false);
-    } else {
-      setIsPaused(true);
-    }
-  }
+  const pendingReviewCount = (alertCounts.new || 0) + (alertCounts.reviewing || 0) + (alertCounts.investigating || 0);
 
-  // ── Filter transactions for display ───────────────────────────
-  const filteredTransactions = transactions.filter(tx => {
-    if (filterMode === 'all') return true;
-    if (filterMode === 'flagged') return tx.status === 'flagged' || tx.status === 'blocked';
-    if (filterMode === 'critical') {
-      return tx.risk_score !== undefined && getSeverityFromScore(tx.risk_score) === 'critical';
-    }
-    return true;
-  });
+  // Compute scale for 24h chart
+  const maxBucketVal = Math.max(1, ...volumeBuckets);
 
-  // ── Counts for filter tabs ─────────────────────────────────────
-  const flaggedCount = transactions.filter(
-    tx => tx.status === 'flagged' || tx.status === 'blocked'
-  ).length;
-
-  const criticalCount = transactions.filter(
-    tx => tx.risk_score !== undefined && getSeverityFromScore(tx.risk_score) === 'critical'
-  ).length;
-
-  // ─────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full -m-6">
-
-      {/* ── Top Control Bar ──────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-[#1E2535] bg-[#0D0F1A] shrink-0">
-
-        {/* Left: Title + live indicator */}
-        <div className="flex items-center gap-3">
-          <h1 className="text-sm font-semibold text-[#F1F3FA]">
-            Live Transaction Feed
-          </h1>
-          <div className="flex items-center gap-1.5">
-            <div className={clsx(
-              'w-1.5 h-1.5 rounded-full',
-              connected && !isPaused ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'
-            )} />
-            <span className="text-xs text-[#8B8FA8] font-mono">
-              {isPaused
-                ? `PAUSED — ${newCountWhilePaused} new`
-                : connected ? 'LIVE' : 'OFFLINE'
-              }
-            </span>
-          </div>
+    <div className="space-y-6">
+      {/* Header Banner */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-[#1E2535]">
+        <div>
+          <h1 className="text-xl font-bold text-[#F1F3FA]">Dashboard Overview</h1>
+          <p className="text-xs text-[#8B8FA8] mt-0.5">
+            Real-time fraud surveillance, key risk indicators & system metrics
+          </p>
         </div>
-
-        {/* Center: Filter tabs */}
-        <div className="flex items-center gap-1 bg-[#131929] rounded-lg p-1 border border-[#1E2535]">
-          {([ 
-            { mode: 'all' as FilterMode,      label: 'ALL',      count: transactions.length },
-            { mode: 'flagged' as FilterMode,  label: 'FLAGGED',  count: flaggedCount },
-            { mode: 'critical' as FilterMode, label: 'CRITICAL', count: criticalCount },
-          ]).map(({ mode, label, count }) => (
-            <button
-              key={mode}
-              onClick={() => setFilterMode(mode)}
-              className={clsx(
-                'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium font-mono transition-colors',
-                filterMode === mode
-                  ? 'bg-[#3882F6] text-white'
-                  : 'text-[#8B8FA8] hover:text-[#F1F3FA] hover:bg-white/5'
-              )}
-            >
-              {label}
-              <span className={clsx(
-                'text-xs rounded px-1',
-                filterMode === mode
-                  ? 'bg-white/20 text-white'
-                  : 'bg-[#1E2535] text-[#4A4F6A]'
-              )}>
-                {count}
-              </span>
-            </button>
-          ))}
-        </div>
-
-        {/* Right: Pause/Play button */}
-        <div className="flex items-center gap-2">
-          {isPaused && newCountWhilePaused > 0 && (
-            <span className="text-xs text-amber-400 font-mono animate-pulse">
-              +{newCountWhilePaused} waiting
-            </span>
-          )}
-          <button
-            onClick={handlePauseToggle}
-            className={clsx(
-              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border',
-              isPaused
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
-                : 'bg-[#131929] border-[#1E2535] text-[#8B8FA8] hover:text-[#F1F3FA] hover:bg-white/5'
-            )}
-          >
-            {isPaused
-              ? <><Play size={12} /> Resume</>
-              : <><Pause size={12} /> Pause</>
-            }
-          </button>
+        <div className="flex items-center gap-2 text-xs font-mono text-[#8B8FA8] bg-[#131929] px-3 py-1.5 rounded-lg border border-[#1E2535] self-start sm:self-auto">
+          <div className={clsx("w-2 h-2 rounded-full", connected ? "bg-emerald-400 animate-pulse" : "bg-rose-500")} />
+          {connected ? 'Surveillance Active • 24h Window' : 'Surveillance Offline'}
         </div>
       </div>
 
-      {/* ── Table ────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-auto">
-        {isLoading ? (
-          // Loading skeleton
-          <div className="p-6 space-y-2">
-            {Array.from({ length: 15 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-9 bg-[#131929] rounded animate-pulse"
-                style={{ opacity: 1 - i * 0.05 }}
-              />
-            ))}
+      {/* ── Top 4 Metric Cards ───────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Transactions Today */}
+        <div className="p-4 bg-[#0D0F1A] border border-[#1E2535] rounded-xl flex flex-col justify-between hover:border-[#3882F6]/40 transition-colors">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-[#8B8FA8] uppercase tracking-wider">
+              Transactions Today
+            </span>
+            <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400">
+              <Activity size={18} />
+            </div>
           </div>
-        ) : (
-          <table className="w-full border-collapse">
-            {/* Table header */}
-            <thead className="sticky top-0 z-10 bg-[#0D0F1A] border-b border-[#1E2535]">
-              <tr>
-                {[
-                  { label: 'TIME',        className: 'pl-4 pr-3 w-24' },
-                  { label: 'TX ID',       className: 'px-3 w-40' },
-                  { label: 'ACCOUNT',     className: 'px-3 w-32' },
-                  { label: 'AMOUNT',      className: 'px-3 w-28 text-right' },
-                  { label: 'MERCHANT',    className: 'px-3' },
-                  { label: 'COUNTRY',     className: 'px-3 w-24' },
-                  { label: 'STATUS',      className: 'pl-3 pr-4 w-32' },
-                ].map(col => (
-                  <th
-                    key={col.label}
-                    className={clsx(
-                      'py-2.5 text-left text-xs font-semibold text-[#4A4F6A] tracking-widest',
-                      col.className
-                    )}
-                  >
-                    {col.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-
-            <tbody>
-              {filteredTransactions.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="text-center py-16 text-[#4A4F6A] text-sm">
-                    {filterMode === 'all'
-                      ? 'Waiting for transactions...'
-                      : `No ${filterMode} transactions`
-                    }
-                  </td>
-                </tr>
+          <div className="mt-3">
+            <div className="text-2xl font-bold font-mono text-[#F1F3FA]">
+              {isLoading ? (
+                <div className="h-8 w-24 bg-[#131929] rounded animate-pulse" />
+              ) : totalTransactions !== null ? (
+                totalTransactions.toLocaleString()
               ) : (
-                filteredTransactions.map(tx => (
-                  <TransactionRow
-                    key={tx.id}
-                    tx={tx}
-                    isNew={newTxIds.has(tx.id)}
-                    onClick={() => router.push(`/dashboard/transactions/${tx.id}`)}
-                  />
-                ))
+                '—'
               )}
-            </tbody>
-          </table>
-        )}
+            </div>
+            <p className="text-[11px] text-emerald-400 flex items-center gap-1 mt-1 font-mono">
+              <TrendingUp size={12} /> Live stream active
+            </p>
+          </div>
+        </div>
+
+        {/* Alerts Generated */}
+        <div className="p-4 bg-[#0D0F1A] border border-[#1E2535] rounded-xl flex flex-col justify-between hover:border-[#3882F6]/40 transition-colors">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-[#8B8FA8] uppercase tracking-wider">
+              Alerts Generated
+            </span>
+            <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400">
+              <AlertTriangle size={18} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-2xl font-bold font-mono text-[#F1F3FA]">
+              {isLoading ? (
+                <div className="h-8 w-24 bg-[#131929] rounded animate-pulse" />
+              ) : (
+                (alertCounts.total ?? (recentAlerts.length || 0)).toLocaleString()
+              )}
+            </div>
+            <p className="text-[11px] text-[#8B8FA8] mt-1">
+              Total system triggers
+            </p>
+          </div>
+        </div>
+
+        {/* Pending Review */}
+        <div className="p-4 bg-[#0D0F1A] border border-[#1E2535] rounded-xl flex flex-col justify-between hover:border-[#3882F6]/40 transition-colors">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-[#8B8FA8] uppercase tracking-wider">
+              Pending Review
+            </span>
+            <div className="p-2 rounded-lg bg-rose-500/10 text-rose-400">
+              <ShieldAlert size={18} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-2xl font-bold font-mono text-[#F1F3FA]">
+              {isLoading ? (
+                <div className="h-8 w-24 bg-[#131929] rounded animate-pulse" />
+              ) : (
+                pendingReviewCount
+              )}
+            </div>
+            <p className="text-[11px] text-rose-400 mt-1 font-mono">
+              Action required
+            </p>
+          </div>
+        </div>
+
+        {/* Avg Response Time */}
+        <div className="p-4 bg-[#0D0F1A] border border-[#1E2535] rounded-xl flex flex-col justify-between hover:border-[#3882F6]/40 transition-colors">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-[#8B8FA8] uppercase tracking-wider">
+              Avg Response Time
+            </span>
+            <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
+              <Clock size={18} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl font-bold font-mono text-[#F1F3FA]">N/A</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-400 border border-slate-700">
+                API Pending
+              </span>
+            </div>
+            <p className="text-[11px] text-[#4A4F6A] mt-1">
+              Backend metrics collector pending
+            </p>
+          </div>
+        </div>
       </div>
 
-      {/* ── Footer status bar ─────────────────────────────────────── */}
-      <div className="shrink-0 px-6 py-2 border-t border-[#1E2535] bg-[#0D0F1A] flex items-center justify-between">
-        <span className="text-xs text-[#4A4F6A] font-mono">
-          Showing {filteredTransactions.length} of {transactions.length} transactions
-          {filterMode !== 'all' && ` (${filterMode} filter active)`}
-        </span>
-        <span className="text-xs text-[#4A4F6A] font-mono">
-          Cap: {transactions.length}/200
-        </span>
+      {/* ── 24h Volume & Severity Breakdown ──────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Alert Volume 24h Visual Trend */}
+        <div className="lg:col-span-2 p-5 bg-[#0D0F1A] border border-[#1E2535] rounded-xl flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-[#F1F3FA]">Alert Volume (24h)</h2>
+              <p className="text-xs text-[#8B8FA8]">Transaction fraud detection activity timeline</p>
+            </div>
+            <span className="text-xs font-mono text-[#3882F6] bg-[#3882F6]/10 px-2.5 py-1 rounded border border-[#3882F6]/20 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#3882F6] animate-ping" />
+              Live Stream
+            </span>
+          </div>
+
+          {/* Bar Chart */}
+          <div className="h-44 flex items-end justify-between gap-1.5 pt-6 pb-2 px-2 border-b border-[#1E2535]">
+            {volumeBuckets.map((val, i) => {
+              const pct = Math.max(8, Math.round((val / maxBucketVal) * 100));
+              const isCurrent = i === 23;
+              return (
+                <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative h-full justify-end">
+                  <div 
+                    className={clsx(
+                      "w-full rounded-t transition-all duration-300 group-hover:brightness-125",
+                      isCurrent ? "bg-[#3882F6]" : "bg-[#1E2535]"
+                    )}
+                    style={{ height: `${pct}%` }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex justify-between items-center text-[10px] font-mono text-[#4A4F6A] mt-2">
+            <span>24h ago</span>
+            <span>18h ago</span>
+            <span>12h ago</span>
+            <span>6h ago</span>
+            <span className="text-[#3882F6] font-bold">Now</span>
+          </div>
+        </div>
+
+        {/* Severity Breakdown */}
+        <div className="p-5 bg-[#0D0F1A] border border-[#1E2535] rounded-xl flex flex-col justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-[#F1F3FA]">Severity Breakdown</h2>
+            <p className="text-xs text-[#8B8FA8] mb-4">Distribution of triggered security alerts</p>
+
+            <div className="space-y-3">
+              {([
+                { label: 'Critical', count: alertCounts.critical || 0, color: 'bg-rose-500', text: 'text-rose-400' },
+                { label: 'High',     count: alertCounts.high || 0,     color: 'bg-amber-500', text: 'text-amber-400' },
+                { label: 'Medium',   count: alertCounts.medium || 0,   color: 'bg-yellow-500', text: 'text-yellow-400' },
+                { label: 'Low',      count: alertCounts.low || 0,      color: 'bg-blue-500',  text: 'text-blue-400' },
+              ]).map((item) => {
+                const max = Math.max(1, alertCounts.critical + alertCounts.high + alertCounts.medium + alertCounts.low);
+                const pct = Math.round((item.count / max) * 100) || 0;
+                return (
+                  <div key={item.label} className="space-y-1">
+                    <div className="flex justify-between text-xs font-mono">
+                      <span className={item.text}>{item.label}</span>
+                      <span className="text-[#F1F3FA] font-bold">{item.count}</span>
+                    </div>
+                    <div className="h-2 w-full bg-[#131929] rounded-full overflow-hidden border border-[#1E2535]">
+                      <div
+                        className={clsx('h-full rounded-full transition-all duration-500', item.color)}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-[#1E2535] flex items-center justify-between text-xs text-[#8B8FA8]">
+            <span>Active Queue</span>
+            <Link href="/dashboard/alerts" className="text-[#3882F6] hover:underline flex items-center gap-1">
+              Manage Queue <ChevronRight size={12} />
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Recent Alerts & Top Flagged Accounts ──────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Recent Alerts List */}
+        <div className="lg:col-span-2 p-5 bg-[#0D0F1A] border border-[#1E2535] rounded-xl">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-[#F1F3FA]">Recent Triggered Alerts</h2>
+              <p className="text-xs text-[#8B8FA8]">Latest suspicious activities requiring action</p>
+            </div>
+            <Link
+              href="/dashboard/alerts"
+              className="text-xs font-medium text-[#3882F6] hover:underline flex items-center gap-1"
+            >
+              View All Alerts <ArrowUpRight size={14} />
+            </Link>
+          </div>
+
+          {isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-12 bg-[#131929] rounded animate-pulse" />
+              ))}
+            </div>
+          ) : recentAlerts.length === 0 ? (
+            <div className="py-12 text-center text-xs text-[#4A4F6A]">
+              No recent alerts recorded in the system.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {recentAlerts.map((alert) => {
+                const sev = alert.severity || getSeverityFromScore(alert.risk_score);
+                return (
+                  <Link
+                    key={alert.id}
+                    href="/dashboard/alerts"
+                    className="flex items-center justify-between p-3 rounded-lg bg-[#131929] border border-[#1E2535] hover:border-[#3882F6]/40 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={clsx(
+                          'px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase shrink-0',
+                          SEVERITY_BG[sev],
+                          SEVERITY_TEXT[sev]
+                        )}
+                      >
+                        {sev}
+                      </span>
+                      <div>
+                        <div className="text-xs font-medium text-[#F1F3FA] line-clamp-1">
+                          {alert.summary || `High Risk Alert (${alert.risk_score} score)`}
+                        </div>
+                        <div className="text-[11px] font-mono text-[#8B8FA8]">
+                          {alert.transaction?.account_id || 'Account: N/A'} • {new Date(alert.created_at).toLocaleTimeString()}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0 pl-2">
+                      <span className="text-xs font-mono font-bold text-[#F1F3FA]">
+                        {alert.risk_score} <span className="text-[10px] font-normal text-[#4A4F6A]">Score</span>
+                      </span>
+                      <span className="block text-[10px] font-mono capitalize text-[#8B8FA8]">
+                        {alert.status}
+                      </span>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Top Flagged Accounts */}
+        <div className="p-5 bg-[#0D0F1A] border border-[#1E2535] rounded-xl flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-sm font-semibold text-[#F1F3FA]">Top Flagged Accounts</h2>
+                <p className="text-xs text-[#8B8FA8]">Accounts with elevated risk factors</p>
+              </div>
+              <UserX size={16} className="text-[#8B8FA8]" />
+            </div>
+
+            {isLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-10 bg-[#131929] rounded animate-pulse" />
+                ))}
+              </div>
+            ) : topAccounts.length === 0 ? (
+              <div className="py-12 text-center text-xs text-[#4A4F6A]">
+                No account flags reported.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {topAccounts.map((acc) => (
+                  <div
+                    key={acc.accountId}
+                    className="flex items-center justify-between p-2.5 rounded-lg bg-[#131929] border border-[#1E2535]"
+                  >
+                    <div>
+                      <span className="font-mono text-xs text-[#F1F3FA] block font-semibold">
+                        {acc.accountId}
+                      </span>
+                      <span className="text-[10px] text-[#8B8FA8]">
+                        {acc.count} alert{acc.count > 1 ? 's' : ''} triggered
+                      </span>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
+                      Risk {acc.maxScore}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-[#1E2535]">
+            <Link
+              href="/dashboard/accounts"
+              className="text-xs text-[#3882F6] hover:underline flex items-center justify-between"
+            >
+              <span>View All Account Profiles</span>
+              <ChevronRight size={14} />
+            </Link>
+          </div>
+        </div>
       </div>
     </div>
   );

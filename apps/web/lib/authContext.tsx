@@ -14,6 +14,7 @@ import {
   ReactNode,
 } from 'react';
 import { decodeToken, JwtPayload } from './auth';
+import { setApiAccessToken } from '../app/lib/api';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
 
@@ -40,6 +41,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Ref to hold the refresh timer so we can clear it on logout
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep API client token synced with AuthState
+  useEffect(() => {
+    setApiAccessToken(state.accessToken);
+  }, [state.accessToken]);
 
   // ─────────────────────────────────────────
   // Schedule automatic token refresh

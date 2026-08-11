@@ -7,6 +7,7 @@ import {
   ingestTransaction,
   getTransactionById,
   listTransactions,
+  searchGlobalService,
 } from './transaction.service';
 
 // POST /api/v1/transactions — FS-04 (unchanged)
@@ -109,6 +110,21 @@ export async function getTransaction(
       return;
     }
 
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// GET /api/v1/transactions/search?q=...
+export async function searchGlobalHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const q = (req.query.q as string) || '';
+    const result = await searchGlobalService(q);
     res.status(200).json(result);
   } catch (error) {
     next(error);

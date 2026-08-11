@@ -1,11 +1,13 @@
+// apps/web/components/layout/TopBar.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Bell, Clock, User, Search, LogOut } from 'lucide-react';
+import { Bell, Clock, User, LogOut } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../lib/authContext';
 import { useSocket } from '../../hooks/useSocket';
+import { GlobalSearch } from './GlobalSearch';
 
 function WebSocketStatus() {
   const { connected } = useSocket();
@@ -17,7 +19,6 @@ function WebSocketStatus() {
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
     >
-      {/* Status dot with pulse animation when connected */}
       <div className="relative">
         <div className={clsx(
           'w-2 h-2 rounded-full transition-colors duration-300',
@@ -35,7 +36,6 @@ function WebSocketStatus() {
         {connected ? 'Live' : 'Offline'}
       </span>
 
-      {/* Tooltip */}
       {showTooltip && (
         <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-slate-300 whitespace-nowrap z-50">
           {connected ? 'Real-time feed active' : 'Connecting to live feed...'}
@@ -48,8 +48,46 @@ function WebSocketStatus() {
 function Breadcrumb() {
   const pathname = usePathname();
 
-  const rawSegments = pathname.split('/').filter(Boolean);
-  const segments = ['FraudScope', ...rawSegments.map(s => s.charAt(0).toUpperCase() + s.slice(1))];
+  const getBreadcrumbs = (): string[] => {
+    if (pathname === '/dashboard') {
+      return ['FraudScope', 'Dashboard'];
+    }
+    if (pathname.startsWith('/dashboard/live-feed')) {
+      return ['FraudScope', 'Monitoring', 'Live Feed'];
+    }
+    if (pathname.startsWith('/dashboard/alerts')) {
+      return ['FraudScope', 'Monitoring', 'Alerts'];
+    }
+    if (pathname.startsWith('/dashboard/transactions')) {
+      const parts = ['FraudScope', 'Investigation', 'Transactions'];
+      const segments = pathname.split('/').filter(Boolean);
+      if (segments.length > 2) {
+        parts.push(segments[2]);
+      }
+      return parts;
+    }
+    if (pathname.startsWith('/dashboard/accounts')) {
+      return ['FraudScope', 'Investigation', 'Accounts'];
+    }
+    if (pathname.startsWith('/dashboard/rules')) {
+      return ['FraudScope', 'Configuration', 'Rules'];
+    }
+    if (pathname.startsWith('/dashboard/users')) {
+      return ['FraudScope', 'Configuration', 'Users'];
+    }
+    if (pathname.startsWith('/dashboard/audit-logs')) {
+      return ['FraudScope', 'Configuration', 'Audit Logs'];
+    }
+    if (pathname.startsWith('/dashboard/analytics')) {
+      return ['FraudScope', 'Analytics'];
+    }
+
+    // Default fallback
+    const rawSegments = pathname.split('/').filter(Boolean);
+    return ['FraudScope', ...rawSegments.map(s => s.charAt(0).toUpperCase() + s.slice(1))];
+  };
+
+  const segments = getBreadcrumbs();
 
   return (
     <div className="flex items-center gap-1.5 text-[13px]">
@@ -142,27 +180,13 @@ export function TopBar({ userEmail, userRole }: TopBarProps) {
         'fixed top-0 right-0 h-[48px] bg-[#0D0F1A] border-b border-[#1E2535]',
         'flex items-center justify-between px-4 z-20 transition-all duration-200'
       )}
-      style={{ left: 'var(--sidebar-width, 190px)' }}
+      style={{ left: 'var(--sidebar-width, 240px)' }}
     >
       {/* Left section: Breadcrumb */}
       <Breadcrumb />
 
-      {/* Center section: Search input */}
-      <div className="relative w-[280px]">
-        <Search
-          size={14}
-          className="absolute left-[10px] top-1/2 -translate-y-1/2 text-[#4A4F6A] pointer-events-none"
-        />
-        <input
-          type="search"
-          placeholder="Search transactions, accounts..."
-          className={clsx(
-            'w-full h-[32px] pl-[32px] pr-3 bg-[#131929] border border-[#1E2535] rounded-[8px]',
-            'text-[13px] text-[#F1F3FA] placeholder-[#4A4F6A]',
-            'focus:outline-none focus:border-[#3882F6] transition-colors duration-150'
-          )}
-        />
-      </div>
+      {/* Center section: Global Search input */}
+      <GlobalSearch />
 
       {/* Right section: Action buttons + WebSocketStatus + User Menu */}
       <div className="flex items-center gap-3">

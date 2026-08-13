@@ -178,7 +178,7 @@ export function TopBar({ userEmail, userRole }: TopBarProps) {
     <header
       className={clsx(
         'fixed top-0 right-0 h-[48px] bg-[#0D0F1A] border-b border-[#1E2535]',
-        'flex items-center justify-between px-4 z-20 transition-all duration-200'
+        'flex items-center justify-between px-4 z-40 transition-all duration-200'
       )}
       style={{ left: 'var(--sidebar-width, 240px)' }}
     >
@@ -196,7 +196,7 @@ export function TopBar({ userEmail, userRole }: TopBarProps) {
         <button
           type="button"
           aria-label="Notifications"
-          className="w-[32px] h-[32px] rounded-[8px] flex items-center justify-center text-[#8B8FA8] hover:bg-[#131929] hover:text-[#F1F3FA] transition-colors duration-150"
+          className="w-[32px] h-[32px] rounded-[8px] flex items-center justify-center text-[#8B8FA8] hover:bg-[#131929] hover:text-[#F1F3FA] transition-colors duration-150 cursor-pointer"
         >
           <Bell size={16} />
         </button>
@@ -205,7 +205,7 @@ export function TopBar({ userEmail, userRole }: TopBarProps) {
         <button
           type="button"
           aria-label="Recent activity"
-          className="w-[32px] h-[32px] rounded-[8px] flex items-center justify-center text-[#8B8FA8] hover:bg-[#131929] hover:text-[#F1F3FA] transition-colors duration-150"
+          className="w-[32px] h-[32px] rounded-[8px] flex items-center justify-center text-[#8B8FA8] hover:bg-[#131929] hover:text-[#F1F3FA] transition-colors duration-150 cursor-pointer"
         >
           <Clock size={16} />
         </button>
@@ -214,7 +214,7 @@ export function TopBar({ userEmail, userRole }: TopBarProps) {
         <button
           type="button"
           aria-label="User profile icon"
-          className="w-[32px] h-[32px] rounded-[8px] flex items-center justify-center text-[#8B8FA8] hover:bg-[#131929] hover:text-[#F1F3FA] transition-colors duration-150"
+          className="w-[32px] h-[32px] rounded-[8px] flex items-center justify-center text-[#8B8FA8] hover:bg-[#131929] hover:text-[#F1F3FA] transition-colors duration-150 cursor-pointer"
         >
           <User size={16} />
         </button>

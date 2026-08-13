@@ -162,7 +162,7 @@ export function GlobalSearch() {
   const isTyping = query.trim().length > 0;
 
   return (
-    <div ref={containerRef} className="relative w-[280px] sm:w-[320px]">
+    <div ref={containerRef} className="relative w-[280px] sm:w-[320px]" style={{ zIndex: 9999 }}>
       {/* Search Input */}
       <div className="relative">
         <Search
@@ -179,7 +179,7 @@ export function GlobalSearch() {
           placeholder="Search transactions, accounts..."
           className={clsx(
             'w-full h-[32px] pl-[32px] pr-8 bg-[#131929] border border-[#1E2535] rounded-[8px]',
-            'text-[13px] text-[#F1F3FA] placeholder-[#4A4F6A]',
+            'text-[13px] text-[#E5E7EB] placeholder-[#5A5F7A]',
             'focus:outline-none focus:border-[#3882F6] transition-colors duration-150'
           )}
         />
@@ -191,30 +191,38 @@ export function GlobalSearch() {
         )}
       </div>
 
-      {/* Search Results Popover */}
+      {/* Search Results Popover — uses fixed z-index to float above everything */}
       {isOpen && isTyping && (
-        <div className="absolute left-0 top-full mt-1.5 w-[360px] max-h-[380px] bg-[#0D0F1A] border border-[#1E2535] rounded-xl shadow-2xl z-50 overflow-y-auto">
+        <div
+          className="absolute left-0 top-full mt-1.5 w-[380px] max-h-[400px] overflow-y-auto rounded-xl"
+          style={{
+            zIndex: 9999,
+            background: '#0D1017',
+            border: '1px solid #2A3148',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03)',
+          }}
+        >
           {isLoading && !hasResults ? (
-            <div className="p-4 flex items-center justify-center gap-2 text-xs text-[#8B8FA8] font-mono">
+            <div className="p-5 flex items-center justify-center gap-2 text-xs text-[#9CA0B8] font-mono">
               <Loader2 size={14} className="animate-spin text-[#3882F6]" />
               Searching...
             </div>
           ) : error ? (
-            <div className="p-4 text-center text-xs text-rose-400 flex items-center justify-center gap-1.5 font-mono">
+            <div className="p-5 text-center text-xs text-rose-400 flex items-center justify-center gap-1.5 font-mono">
               <AlertCircle size={14} />
               Unable to search right now.
             </div>
           ) : !hasResults ? (
-            <div className="p-6 text-center text-xs text-[#4A4F6A] font-mono">
+            <div className="p-6 text-center text-xs text-[#6B7094] font-mono">
               No transactions or accounts found.
             </div>
           ) : (
-            <div className="py-2 divide-y divide-[#1E2535]">
+            <div className="py-1.5 divide-y divide-[#1E2535]">
               {/* Transactions Section */}
               {results.transactions.length > 0 && (
                 <div className="py-1">
-                  <div className="px-3 py-1 text-[10px] font-bold text-[#4A4F6A] tracking-wider uppercase font-mono">
-                    TRANSACTIONS
+                  <div className="px-3 py-1.5 text-[10px] font-bold text-[#6B7094] tracking-wider uppercase font-mono">
+                    Transactions
                   </div>
                   {results.transactions.map((tx, idx) => {
                     const isSelected = selectedIndex === idx;
@@ -224,25 +232,28 @@ export function GlobalSearch() {
                         onClick={() => handleSelectItem({ type: 'tx', data: tx })}
                         onMouseEnter={() => setSelectedIndex(idx)}
                         className={clsx(
-                          'w-full px-3 py-2 text-left flex items-center justify-between text-xs transition-colors',
-                          isSelected ? 'bg-[#3882F6]/15 text-[#F1F3FA]' : 'hover:bg-white/[0.03] text-[#8B8FA8]'
+                          'w-full px-3 py-2.5 text-left flex items-center justify-between text-xs',
+                          'cursor-pointer transition-colors duration-150',
+                          isSelected
+                            ? 'bg-[#3882F6]/12 text-[#E5E7EB]'
+                            : 'text-[#9CA0B8] hover:bg-white/[0.04]'
                         )}
                       >
                         <div className="flex items-center gap-2.5 overflow-hidden">
                           <Receipt size={14} className="text-[#3882F6] shrink-0" />
                           <div className="truncate">
-                            <span className="font-mono font-medium text-[#F1F3FA] block truncate">
+                            <span className="font-mono font-medium text-[#E5E7EB] block truncate">
                               {tx.external_id || tx.id}
                             </span>
-                            <span className="text-[11px] font-mono text-[#8B8FA8] block truncate">
+                            <span className="text-[11px] font-mono text-[#7A7F98] block truncate">
                               {tx.account_id} {tx.merchant_name ? `• ${tx.merchant_name}` : ''}
                             </span>
                           </div>
                         </div>
 
                         <div className="text-right shrink-0 pl-2">
-                          <span className="font-mono font-bold text-[#F1F3FA] block">
-                            ${parseFloat(tx.amount as any).toFixed(2)} {tx.currency}
+                          <span className="font-mono font-bold text-[#E5E7EB] block">
+                            ${(Number(tx.amount) || 0).toFixed(2)} {tx.currency}
                           </span>
                           <span
                             className={clsx(
@@ -262,8 +273,8 @@ export function GlobalSearch() {
               {/* Accounts Section */}
               {results.accounts.length > 0 && (
                 <div className="py-1">
-                  <div className="px-3 py-1 text-[10px] font-bold text-[#4A4F6A] tracking-wider uppercase font-mono">
-                    ACCOUNTS
+                  <div className="px-3 py-1.5 text-[10px] font-bold text-[#6B7094] tracking-wider uppercase font-mono">
+                    Accounts
                   </div>
                   {results.accounts.map((acc, idx) => {
                     const globalIdx = results.transactions.length + idx;
@@ -274,13 +285,16 @@ export function GlobalSearch() {
                         onClick={() => handleSelectItem({ type: 'account', data: acc })}
                         onMouseEnter={() => setSelectedIndex(globalIdx)}
                         className={clsx(
-                          'w-full px-3 py-2 text-left flex items-center justify-between text-xs transition-colors',
-                          isSelected ? 'bg-[#3882F6]/15 text-[#F1F3FA]' : 'hover:bg-white/[0.03] text-[#8B8FA8]'
+                          'w-full px-3 py-2.5 text-left flex items-center justify-between text-xs',
+                          'cursor-pointer transition-colors duration-150',
+                          isSelected
+                            ? 'bg-[#3882F6]/12 text-[#E5E7EB]'
+                            : 'text-[#9CA0B8] hover:bg-white/[0.04]'
                         )}
                       >
                         <div className="flex items-center gap-2.5">
                           <Users size={14} className="text-indigo-400 shrink-0" />
-                          <span className="font-mono font-medium text-[#F1F3FA]">
+                          <span className="font-mono font-medium text-[#E5E7EB]">
                             {acc.account_id}
                           </span>
                         </div>

@@ -74,3 +74,29 @@ body {
 .animate-slideIn {
   animation: slideIn 0.2s ease-out forwards;
 }
+
+/* ── Leaflet map overrides for dark theme ───────────────────── */
+.leaflet-container {
+  background: #0A0D16 !important;
+  font-family: 'JetBrains Mono', monospace;
+  /* Keep map z-index low so the global search dropdown floats above */
+  z-index: 0 !important;
+}
+
+.leaflet-tile-pane {
+  opacity: 0.85;
+}
+
+.leaflet-control-attribution {
+  display: none !important;
+}
+
+/* Keep Leaflet popups/tooltips visible within the map but below the global search */
+.leaflet-pane {
+  z-index: 0 !important;
+}
+
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 1 !important;
+}

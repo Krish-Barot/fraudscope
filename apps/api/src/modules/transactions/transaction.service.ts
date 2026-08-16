@@ -8,6 +8,22 @@ import { CreateTransactionInput } from './transaction.schema';
 const TX_STREAM = 'tx:incoming';
 const TX_PUBSUB = 'tx:live';
 
+function parseNumeric(val: any): number | null {
+  if (val === null || val === undefined || val === '') return null;
+  const num = typeof val === 'number' ? val : Number(val);
+  return isNaN(num) ? null : num;
+}
+
+export function normalizeTransaction<T extends Record<string, any>>(tx: T): T {
+  if (!tx) return tx;
+  return {
+    ...tx,
+    amount: parseNumeric(tx.amount) ?? tx.amount,
+    latitude: parseNumeric(tx.latitude),
+    longitude: parseNumeric(tx.longitude),
+  };
+}
+
 // ─────────────────────────────────────────
 // Ingest a new transaction (FS-04 — unchanged)
 // ─────────────────────────────────────────
@@ -70,7 +86,7 @@ export async function ingestTransaction(input: CreateTransactionInput) {
     source: 'api',
   });
 
-  return transaction;
+  return normalizeTransaction(transaction);
 }
 
 // ─────────────────────────────────────────
@@ -142,7 +158,7 @@ export async function listTransactions(filters: ListTransactionsFilters) {
     .select('*');
 
   return {
-    data,
+    data: data.map(normalizeTransaction),
     pagination: {
       page,
       limit,
@@ -209,13 +225,15 @@ export async function getTransactionById(id: string) {
       'country_code',
       'channel',
       'status',
-      'created_at'
+      'created_at',
+      'latitude',
+      'longitude'
     );
 
   return {
-    ...transaction,
+    ...normalizeTransaction(transaction),
     alerts: alertsWithRules,
-    account_history: accountHistory,
+    account_history: accountHistory.map(normalizeTransaction),
   };
 }
 
@@ -271,7 +289,7 @@ export async function searchGlobalService(queryStr: string) {
   }));
 
   return {
-    transactions,
+    transactions: transactions.map(normalizeTransaction),
     accounts,
   };
 }

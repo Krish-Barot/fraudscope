@@ -2,6 +2,7 @@
 
 import { db } from '../../config/database';
 import { redisPublisher } from '../../config/redis';
+import { normalizeTransaction } from '../transactions/transaction.service';
 
 export interface ListAlertsFilters {
   status?: string;
@@ -85,7 +86,7 @@ export async function listAlerts(filters: ListAlertsFilters) {
 
       return {
         ...alert,
-        transaction: transaction || undefined,
+        transaction: transaction ? normalizeTransaction(transaction) : undefined,
         triggered_rules,
       };
     })
@@ -136,9 +137,10 @@ export async function getAlertById(alertId: string) {
   const alert = await db('alerts').where('id', alertId).first();
   if (!alert) return null;
 
-  const transaction = await db('transactions')
+  const rawTx = await db('transactions')
     .where('id', alert.transaction_id)
     .first();
+  const transaction = rawTx ? normalizeTransaction(rawTx) : null;
 
   const triggeredRulesRaw = await db('alert_rules')
     .join('rules', 'alert_rules.rule_id', 'rules.id')

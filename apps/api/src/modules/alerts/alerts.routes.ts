@@ -1,28 +1,51 @@
 // apps/api/src/modules/alerts/alerts.routes.ts
+// Route order matters here:
+// /counts MUST come before /:id
+// Otherwise Express treats 'counts' as an alert ID
 
 import { Router } from 'express';
 import { authenticate } from '../../middleware/authenticate';
 import { authorize } from '../../middleware/authorize';
 import {
-  getAlerts,
-  getCounts,
-  getAlert,
-  postAlertAction,
+  getAlertsHandler,
+  getAlertCountsHandler,
+  getAlertHandler,
+  takeActionHandler,
 } from './alerts.controller';
 
 const router = Router();
 
-// GET /api/v1/alerts — list alerts with filters and pagination
-router.get('/', authenticate, authorize('analyst', 'admin'), getAlerts);
+// GET /api/v1/alerts
+router.get(
+  '/',
+  authenticate,
+  authorize('analyst', 'admin'),
+  getAlertsHandler
+);
 
-// GET /api/v1/alerts/counts — get counts breakdown
-// (must be before /:id)
-router.get('/counts', authenticate, authorize('analyst', 'admin'), getCounts);
+// GET /api/v1/alerts/counts
+// MUST be before /:id — 'counts' would be treated as an ID otherwise
+router.get(
+  '/counts',
+  authenticate,
+  authorize('analyst', 'admin'),
+  getAlertCountsHandler
+);
 
-// GET /api/v1/alerts/:id — get alert details
-router.get('/:id', authenticate, authorize('analyst', 'admin'), getAlert);
+// GET /api/v1/alerts/:id
+router.get(
+  '/:id',
+  authenticate,
+  authorize('analyst', 'admin'),
+  getAlertHandler
+);
 
-// POST /api/v1/alerts/:id/actions — take action (dismiss, escalate, investigate)
-router.post('/:id/actions', authenticate, authorize('analyst', 'admin'), postAlertAction);
+// POST /api/v1/alerts/:id/actions
+router.post(
+  '/:id/actions',
+  authenticate,
+  authorize('analyst', 'admin'),
+  takeActionHandler
+);
 
 export default router;

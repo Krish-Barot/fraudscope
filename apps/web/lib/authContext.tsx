@@ -1,6 +1,7 @@
 // apps/web/lib/authContext.tsx
-// Global auth state — stores access token in memory
-// Access token never touches localStorage or sessionStorage
+// Global auth state — stores access token in memory + syncs to cookie for proxy
+// Access token is also written to a browser cookie so the Next.js proxy (proxy.ts)
+// can verify the user's role server-side for route protection.
 // Refresh token lives in httpOnly cookie (browser handles it automatically)
 'use client';
 
@@ -13,10 +14,28 @@ import {
   useRef,
   ReactNode,
 } from 'react';
-import { decodeToken, JwtPayload } from './auth';
+import { decodeToken, JwtPayload, ACCESS_TOKEN_COOKIE } from './auth';
 import { setApiAccessToken } from '../app/lib/api';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+
+// ─────────────────────────────────────────
+// Cookie sync — makes access token available to proxy.ts
+// proxy.ts runs on the server and needs to read the JWT
+// to determine the user's role for route protection.
+// This is NOT httpOnly because it needs to be set from JS.
+// The access token is short-lived (15min) and already in memory.
+// ─────────────────────────────────────────
+function syncAccessTokenCookie(token: string | null) {
+  if (token) {
+    // Set cookie with path=/ so proxy.ts can read it on all routes
+    // SameSite=Lax for CSRF protection, no httpOnly needed
+    document.cookie = `${ACCESS_TOKEN_COOKIE}=${token}; path=/; SameSite=Lax`;
+  } else {
+    // Clear the cookie by setting expiry in the past
+    document.cookie = `${ACCESS_TOKEN_COOKIE}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+  }
+}
 
 interface AuthState {
   user: JwtPayload | null;
@@ -79,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const newToken = data.access_token;
           const newUser = decodeToken(newToken);
 
+          syncAccessTokenCookie(newToken);
           setState(prev => ({
             ...prev,
             accessToken: newToken,
@@ -89,9 +109,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           scheduleRefresh(newToken);
         } else {
           // Refresh failed — session expired
+          syncAccessTokenCookie(null);
           setState({ user: null, accessToken: null, isLoading: false });
         }
       } catch {
+        syncAccessTokenCookie(null);
         setState({ user: null, accessToken: null, isLoading: false });
       }
     }, refreshIn);
@@ -115,12 +137,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const token = data.access_token;
           const user = decodeToken(token);
 
+          syncAccessTokenCookie(token);
           setState({ user, accessToken: token, isLoading: false });
           scheduleRefresh(token);
         } else {
+          syncAccessTokenCookie(null);
           setState({ user: null, accessToken: null, isLoading: false });
         }
       } catch {
+        syncAccessTokenCookie(null);
         setState({ user: null, accessToken: null, isLoading: false });
       }
     }
@@ -155,6 +180,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const token = data.access_token;
     const user = decodeToken(token);
 
+    syncAccessTokenCookie(token);
     setState({ user, accessToken: token, isLoading: false });
     scheduleRefresh(token);
   }, [scheduleRefresh]);
@@ -179,6 +205,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Even if API call fails, clear local state
     }
 
+    syncAccessTokenCookie(null);
     setState({ user: null, accessToken: null, isLoading: false });
   }, [state.accessToken]);
 

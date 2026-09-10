@@ -69,13 +69,13 @@ function Breadcrumb() {
     if (pathname.startsWith('/dashboard/accounts')) {
       return ['FraudScope', 'Investigation', 'Accounts'];
     }
-    if (pathname.startsWith('/dashboard/rules')) {
+    if (pathname.startsWith('/dashboard/admin/rules')) {
       return ['FraudScope', 'Configuration', 'Rules'];
     }
-    if (pathname.startsWith('/dashboard/users')) {
+    if (pathname.startsWith('/dashboard/admin/users')) {
       return ['FraudScope', 'Configuration', 'Users'];
     }
-    if (pathname.startsWith('/dashboard/audit-logs')) {
+    if (pathname.startsWith('/dashboard/admin/audit')) {
       return ['FraudScope', 'Configuration', 'Audit Logs'];
     }
     if (pathname.startsWith('/dashboard/analytics')) {

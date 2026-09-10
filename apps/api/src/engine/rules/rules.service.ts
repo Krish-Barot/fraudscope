@@ -9,6 +9,7 @@
 // 5. Cache invalidation when rules change
 
 import { db } from '../../config/database';
+import { redisPublisher } from '../../config/redis';
 import { invalidateRuleCache } from '../../engine/scorer';
 import { CreateRuleInput, UpdateRuleInput } from './rules.schema';
 
@@ -68,6 +69,22 @@ async function writeAuditLog(
     payload: JSON.stringify(payload),
     source: 'api',
   });
+}
+
+// ─────────────────────────────────────────
+// Publish rules:updated event to Redis PubSub
+// Broadcasts to all connected dashboards via WebSocket
+// ─────────────────────────────────────────
+async function publishRuleEvent(action: string, ruleId: string): Promise<void> {
+  try {
+    await redisPublisher.publish('rules:updated', JSON.stringify({
+      action,
+      ruleId,
+      timestamp: new Date().toISOString(),
+    }));
+  } catch (err) {
+    console.error('[Rules] Failed to publish rules:updated event:', (err as Error).message);
+  }
 }
 
 // ─────────────────────────────────────────
@@ -155,8 +172,8 @@ export async function listRules(filters: {
 
   const rules = await query.orderBy('created_at', 'asc');
 
-  // Add 7-day hit count to each rule
-  // Run hit count queries in parallel for performance
+  // Add 7-day hit count and stats to each rule
+  // Run queries in parallel for performance
   const rulesWithHitCount = await Promise.all(
     rules.map(async (rule: any) => ({
       ...rule,
@@ -164,6 +181,7 @@ export async function listRules(filters: {
         ? JSON.parse(rule.parameters)
         : rule.parameters,
       hit_count_7d: await getRuleHitCount(rule.id),
+      stats: await getRuleStats(rule.id),
     }))
   );
 
@@ -220,6 +238,8 @@ export async function createRule(
   // New rule should take effect immediately
   invalidateRuleCache();
 
+  publishRuleEvent('create', rule.id);
+
   return {
     ...rule,
     parameters: typeof rule.parameters === 'string'
@@ -274,6 +294,8 @@ export async function updateRule(
   // Changes take effect immediately
   invalidateRuleCache();
 
+  publishRuleEvent('update', id);
+
   return {
     ...rule,
     parameters: typeof rule.parameters === 'string'
@@ -313,6 +335,8 @@ export async function toggleRule(
   // Unlike the 60s TTL, a toggled rule must take effect within seconds
   // because an admin toggling a rule off is usually reacting to a problem
   invalidateRuleCache();
+
+  publishRuleEvent('toggle', id);
 
   return {
     ...rule,
@@ -358,6 +382,8 @@ export async function deleteRule(
 
   // Rule gone — invalidate cache so worker stops using it
   invalidateRuleCache();
+
+  publishRuleEvent('delete', id);
 
   return { deleted: true, alertCount };
 }

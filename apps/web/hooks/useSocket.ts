@@ -82,6 +82,13 @@ export interface ServerToClientEvents {
     success: boolean;
   }) => void;
 
+  // Rule created, updated, toggled, or deleted
+  'rule:updated': (data: {
+    action: string;
+    ruleId: string;
+    timestamp?: string;
+  }) => void;
+
   // Connection confirmation
   'system:connected': (data: {
     userId: string;

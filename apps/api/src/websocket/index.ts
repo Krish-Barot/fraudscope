@@ -48,6 +48,7 @@ const CHANNEL_ROOM_MAP: Record<string, string> = {
     'tx:live': 'tx:live',
     'alerts:new': 'alerts',
     'alerts:updated': 'alerts',
+    'rules:updated': 'rules',
 };
 
 // All Redis channels to subscribe to
@@ -143,6 +144,7 @@ export function setupWebSocket(httpServer: HttpServer): SocketServer {
             if (channel === 'tx:live') eventName = 'tx:new';
             else if (channel === 'alerts:new') eventName = 'alert:new';
             else if (channel === 'alerts:updated') eventName = 'alert:updated';
+            else if (channel === 'rules:updated') eventName = 'rule:updated';
             else return;
 
             // Emit to all clients in the room
@@ -198,7 +200,7 @@ export function setupWebSocket(httpServer: HttpServer): SocketServer {
         socket.on('subscribe', ({ channels }: { channels: string[] }) => {
             if (!Array.isArray(channels)) return;
 
-            const allowedRooms = ['tx:live', 'alerts'];
+            const allowedRooms = ['tx:live', 'alerts', 'rules'];
             channels
                 .filter(ch => allowedRooms.includes(ch))
                 .forEach(room => {

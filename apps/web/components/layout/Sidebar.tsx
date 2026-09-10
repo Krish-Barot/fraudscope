@@ -20,6 +20,8 @@ import {
   ChevronRight,
   Shield,
   Crosshair,
+  UserCog,
+  FileText,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -56,9 +58,9 @@ const NAV_GROUPS: NavGroup[] = [
     title: 'CONFIGURATION',
     adminOnly: true,
     items: [
-      { label: 'Rules', href: '/dashboard/rules', icon: Sliders, adminOnly: true },
-      { label: 'Users', href: '/dashboard/users', icon: UserCheck, adminOnly: true },
-      { label: 'Audit Logs', href: '/dashboard/audit-logs', icon: FileCode, adminOnly: true },
+      { label: 'Rules', href: '/dashboard/admin/rules', icon: Shield, adminOnly: true },
+      { label: 'Users', href: '/dashboard/admin/users', icon: UserCog, adminOnly: true },
+      { label: 'Audit Logs', href: '/dashboard/admin/audit', icon: FileText, adminOnly: true },
     ],
   },
   {

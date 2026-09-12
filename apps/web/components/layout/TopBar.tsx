@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Bell, Clock, User, LogOut } from 'lucide-react';
 import clsx from 'clsx';
@@ -51,6 +52,9 @@ function Breadcrumb() {
   const getBreadcrumbs = (): string[] => {
     if (pathname === '/dashboard') {
       return ['FraudScope', 'Dashboard'];
+    }
+    if (pathname.startsWith('/dashboard/profile')) {
+      return ['FraudScope', 'User Profile'];
     }
     if (pathname.startsWith('/dashboard/live-feed')) {
       return ['FraudScope', 'Monitoring', 'Live Feed'];
@@ -147,15 +151,23 @@ function UserMenu({ email, role }: { email: string; role: string }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-52 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50">
-          <div className="px-4 py-3 border-b border-slate-700">
+        <div className="absolute right-0 top-full mt-1 w-52 bg-[#131929] border border-[#1E2535] rounded-lg shadow-xl z-50">
+          <div className="px-4 py-3 border-b border-[#1E2535]">
             <p className="text-sm text-slate-200 font-medium truncate">{email}</p>
             <p className="text-xs text-slate-500 mt-0.5 capitalize">{role}</p>
           </div>
           <div className="p-1">
+            <Link
+              href="/dashboard/profile"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+            >
+              <User size={14} className="text-blue-400" />
+              User Profile
+            </Link>
             <button
               onClick={handleLogout}
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md text-slate-400 hover:text-red-400 hover:bg-slate-700 transition-colors"
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
             >
               <LogOut size={14} />
               Sign out
@@ -210,14 +222,14 @@ export function TopBar({ userEmail, userRole }: TopBarProps) {
           <Clock size={16} />
         </button>
 
-        {/* User circle button */}
-        <button
-          type="button"
-          aria-label="User profile icon"
+        {/* User profile link button */}
+        <Link
+          href="/dashboard/profile"
+          aria-label="User profile"
           className="w-[32px] h-[32px] rounded-[8px] flex items-center justify-center text-[#8B8FA8] hover:bg-[#131929] hover:text-[#F1F3FA] transition-colors duration-150 cursor-pointer"
         >
           <User size={16} />
-        </button>
+        </Link>
 
         <UserMenu email={userEmail} role={userRole} />
       </div>

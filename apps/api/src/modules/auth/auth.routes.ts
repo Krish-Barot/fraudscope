@@ -9,6 +9,7 @@ import {
   refreshHandler,
   logoutHandler,
   meHandler,
+  updateProfileHandler,
 } from './auth.controller';
 
 const router = Router();
@@ -32,5 +33,8 @@ router.post('/logout', authenticate, logoutHandler);
 
 // GET /api/v1/auth/me — protected
 router.get('/me', authenticate, meHandler);
+
+// PATCH /api/v1/auth/me — protected (update profile/password)
+router.patch('/me', authenticate, updateProfileHandler);
 
 export default router;

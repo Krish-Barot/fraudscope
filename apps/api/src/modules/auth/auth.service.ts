@@ -17,7 +17,7 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { db } from '../../config/database';
-import { LoginInput, RegisterInput } from './auth.schema';
+import { LoginInput, RegisterInput, UpdateProfileInput } from './auth.schema';
 
 // ─────────────────────────────────────────
 // Token generation helpers
@@ -221,4 +221,65 @@ export async function getCurrentUser(userId: string) {
     .first();
 
   return user || null;
+}
+
+// ─────────────────────────────────────────
+// Update current user profile and/or password
+// ─────────────────────────────────────────
+export async function updateProfile(
+  userId: string,
+  input: UpdateProfileInput,
+  ipAddress?: string
+) {
+  const user = await db('users').where({ id: userId }).first();
+  if (!user) {
+    const err = new Error('User not found') as any;
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+
+  const updates: Record<string, unknown> = {
+    updated_at: db.fn.now(),
+  };
+
+  if (input.first_name !== undefined) updates.first_name = input.first_name;
+  if (input.last_name !== undefined) updates.last_name = input.last_name;
+
+  if (input.new_password) {
+    const isMatch = await bcrypt.compare(input.current_password || '', user.password_hash);
+    if (!isMatch) {
+      const err = new Error('Current password is incorrect') as any;
+      err.code = 'INVALID_PASSWORD';
+      throw err;
+    }
+    const hash = await bcrypt.hash(input.new_password, 10);
+    updates.password_hash = hash;
+  }
+
+  await db('users').where({ id: userId }).update(updates);
+
+  if (input.new_password) {
+    await writeAuditLog('user.password_changed', userId, { userId }, ipAddress);
+  }
+
+  if (input.first_name !== undefined || input.last_name !== undefined) {
+    await writeAuditLog(
+      'user.profile_updated',
+      userId,
+      {
+        changes: {
+          first_name: input.first_name,
+          last_name: input.last_name,
+        },
+        previous: {
+          first_name: user.first_name,
+          last_name: user.last_name,
+        },
+      },
+      ipAddress
+    );
+  }
+
+  const updatedUser = await getCurrentUser(userId);
+  return updatedUser!;
 }

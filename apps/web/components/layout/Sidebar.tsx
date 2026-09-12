@@ -73,7 +73,7 @@ const NAV_GROUPS: NavGroup[] = [
 
 const BOTTOM_ITEMS: NavItem[] = [
   { label: 'Support', href: '#', icon: HelpCircle },
-  { label: 'User Profile', href: '#', icon: User },
+  { label: 'User Profile', href: '/dashboard/profile', icon: User },
 ];
 
 interface SidebarProps {

@@ -3,13 +3,14 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
-import { loginSchema, registerSchema } from './auth.schema';
+import { loginSchema, registerSchema, updateProfileSchema } from './auth.schema';
 import {
   login,
   register,
   refresh,
   logout,
   getCurrentUser,
+  updateProfile,
   verifyRefreshToken,
 } from './auth.service';
 
@@ -200,6 +201,50 @@ export async function meHandler(
 
     res.status(200).json({ user });
   } catch (error) {
+    next(error);
+  }
+}
+
+// PATCH /api/v1/auth/me
+export async function updateProfileHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const input = updateProfileSchema.parse(req.body);
+    const user = await updateProfile(
+      req.user!.userId,
+      input,
+      req.ip || undefined
+    );
+
+    res.status(200).json({ user });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      res.status(400).json(formatZodError(error, req));
+      return;
+    }
+    if ((error as any).code === 'INVALID_PASSWORD') {
+      res.status(400).json({
+        error: {
+          code: 'INVALID_PASSWORD',
+          message: 'Current password is incorrect',
+          request_id: req.requestId,
+        },
+      });
+      return;
+    }
+    if ((error as any).code === 'NOT_FOUND') {
+      res.status(404).json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'User not found',
+          request_id: req.requestId,
+        },
+      });
+      return;
+    }
     next(error);
   }
 }

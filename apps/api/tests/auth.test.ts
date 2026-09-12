@@ -395,3 +395,89 @@ describe('POST /api/v1/auth/logout', () => {
     expect(log).toBeDefined();
   });
 });
+
+// ─────────────────────────────────────────
+// PATCH /api/v1/auth/me
+// ─────────────────────────────────────────
+describe('PATCH /api/v1/auth/me', () => {
+  test('updates first_name and last_name for authenticated user', async () => {
+    const user = await createUser({
+      email: 'profile@example.com',
+      first_name: 'Jane',
+      last_name: 'Doe',
+    });
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    const response = await request(app)
+      .patch('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        first_name: 'Janet',
+        last_name: 'Smith',
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.user.first_name).toBe('Janet');
+    expect(response.body.user.last_name).toBe('Smith');
+
+    const dbUser = await db('users').where({ id: user.id }).first();
+    expect(dbUser.first_name).toBe('Janet');
+    expect(dbUser.last_name).toBe('Smith');
+  });
+
+  test('changes password with valid current_password', async () => {
+    const user = await createUser({ email: 'pwdchange@example.com' });
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    const response = await request(app)
+      .patch('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        current_password: 'password123',
+        new_password: 'brandnewpassword123',
+      });
+
+    expect(response.status).toBe(200);
+
+    // Verify login with new password works
+    const loginRes = await request(app)
+      .post('/api/v1/auth/login')
+      .send({
+        email: 'pwdchange@example.com',
+        password: 'brandnewpassword123',
+      });
+
+    expect(loginRes.status).toBe(200);
+  });
+
+  test('fails password change with incorrect current_password', async () => {
+    const user = await createUser({ email: 'wrongpwd@example.com' });
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    const response = await request(app)
+      .patch('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        current_password: 'incorrectPassword',
+        new_password: 'brandnewpassword123',
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('INVALID_PASSWORD');
+  });
+});

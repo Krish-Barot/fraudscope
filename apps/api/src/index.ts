@@ -2,7 +2,7 @@ import { validateApiEnv } from './config/env';
 const env = validateApiEnv();
 
 import express from 'express';
-import http from 'http';          // ← NEW: explicit HTTP server
+import http from 'http';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { connectDatabase } from './config/database';
@@ -13,7 +13,9 @@ import transactionRoutes from './modules/transactions/transaction.routes';
 import rulesRoutes from './modules/rules/rules.routes';
 import alertsRoutes from './modules/alerts/alerts.routes';
 import usersRoutes from './modules/users/users.routes';
-import { setupWebSocket } from './websocket/index';  // ← NEW
+import { setupWebSocket } from './websocket/index';  
+import auditRoutes from './modules/audit/audit.routes';
+
 
 const app = express();
 
@@ -41,6 +43,7 @@ app.use('/api/v1/transactions', transactionRoutes);
 app.use('/api/v1/rules', rulesRoutes);
 app.use('/api/v1/alerts', alertsRoutes);
 app.use('/api/v1/users', usersRoutes);
+app.use('/api/v1/audit-logs', auditRoutes);
 
 app.use(errorHandler);
 

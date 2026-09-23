@@ -13,6 +13,7 @@ import {
   Sliders,
   UserCheck,
   FileCode,
+  Activity,
   BarChart3,
   HelpCircle,
   User,
@@ -61,6 +62,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'Rules', href: '/dashboard/admin/rules', icon: Shield, adminOnly: true },
       { label: 'Users', href: '/dashboard/admin/users', icon: UserCog, adminOnly: true },
       { label: 'Audit Logs', href: '/dashboard/admin/audit', icon: FileText, adminOnly: true },
+      { label: 'System Health', href: '/dashboard/admin/system', icon: Activity, adminOnly: true },
     ],
   },
   {

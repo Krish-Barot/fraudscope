@@ -16,7 +16,7 @@ import usersRoutes from './modules/users/users.routes';
 import { setupWebSocket } from './websocket/index';  
 import auditRoutes from './modules/audit/audit.routes';
 import healthRoutes from './modules/health/health.routes';
-
+import analyticsRoutes from './modules/analytics/analytics.routes';
 
 const app = express();
 
@@ -46,6 +46,7 @@ app.use('/api/v1/alerts', alertsRoutes);
 app.use('/api/v1/users', usersRoutes);
 app.use('/api/v1/audit-logs', auditRoutes);
 app.use('/api/v1/health', healthRoutes);
+app.use('/api/v1/analytics', analyticsRoutes);
 
 app.use(errorHandler);
 

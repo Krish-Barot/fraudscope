@@ -15,7 +15,7 @@ import {
   PieChart,
   Pie,
   Cell,
-  Legend,
+  BarChart, Bar
 } from 'recharts';
 import {
   TrendingUp,
@@ -27,6 +27,7 @@ import {
   Activity,
   Clock,
   Shield,
+  Users,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../../lib/authContext';
@@ -78,6 +79,63 @@ interface SeverityItem {
 interface SeverityData {
   total: number;
   data: SeverityItem[];
+}
+
+interface RuleEffectivenessItem {
+  id: string;
+  name: string;
+  type: string;
+  severity: string;
+  is_active: boolean;
+  trigger_count: number;
+  true_positives: number;
+  false_positives: number;
+  tp_rate: number;
+  fp_rate: number;
+  avg_contribution: number;
+  trend: number;
+  prev_count: number;
+}
+
+interface ResolutionPoint {
+  period: string;
+  dismiss: number;
+  escalate: number;
+  investigate: number;
+  total: number;
+}
+
+interface ResolutionSummary {
+  total_resolved: number;
+  resolution_rate: number;
+  total_dismissed: number;
+  total_escalated: number;
+  total_investigated: number;
+  avg_time_dismiss: string;
+  avg_time_escalate: string;
+  avg_time_investigate: string;
+}
+
+interface ResolutionData {
+  group_by: 'hour' | 'day';
+  data: ResolutionPoint[];
+  summary: ResolutionSummary;
+}
+
+interface AnalystPerformanceItem {
+  id: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+  total_reviewed: number;
+  dismissed: number;
+  escalated: number;
+  investigated: number;
+  avg_response_seconds: number;
+  avg_response_formatted: string;
+  escalation_rate: number;
+  fp_rate: number;
 }
 
 type DatePreset = '24h' | '7d' | '30d' | '90d' | 'custom';
@@ -301,6 +359,659 @@ function DonutCenterLabel({ viewBox, total }: { viewBox?: any; total: number }) 
 }
 
 // ─────────────────────────────────────────
+// Rule type badge (reuse style from rules manager)
+// ─────────────────────────────────────────
+const RULE_TYPE_COLORS: Record<string, string> = {
+  velocity: '#818cf8',
+  amount_anomaly: '#34d399',
+  geo_mismatch: '#fb923c',
+  time_anomaly: '#a78bfa',
+  round_amount: '#38bdf8',
+};
+
+function RuleTypeBadge({ type }: { type: string }) {
+  const color = RULE_TYPE_COLORS[type] || '#8B8FA8';
+  const label = type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return (
+    <span
+      className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+      style={{ background: `${color}15`, color, border: `1px solid ${color}25` }}
+    >
+      {label}
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────
+// Sortable column header
+// ─────────────────────────────────────────
+function SortHeader({
+  label,
+  field,
+  current,
+  direction,
+  onClick,
+}: {
+  label: string;
+  field: string;
+  current: string;
+  direction: 'asc' | 'desc';
+  onClick: (f: string) => void;
+}) {
+  const isActive = current === field;
+  return (
+    <button
+      onClick={() => onClick(field)}
+      className={clsx(
+        'flex items-center gap-1 text-xs font-semibold uppercase tracking-widest transition-colors',
+        isActive ? 'text-blue-400' : 'text-[#4A4F6A] hover:text-[#8B8FA8]'
+      )}
+    >
+      {label}
+      <span className="text-xs">
+        {isActive ? (direction === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
+      </span>
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────
+// FP rate color
+// ─────────────────────────────────────────
+function fpRateColor(rate: number): string {
+  if (rate >= 50) return '#ef4444';
+  if (rate >= 25) return '#f59e0b';
+  return '#34d399';
+}
+
+// ─────────────────────────────────────────
+// Analyst avatar
+// ─────────────────────────────────────────
+function AnalystAvatar({ firstName, lastName, id }: {
+  firstName: string;
+  lastName: string;
+  id: string;
+}) {
+  const colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f97316', '#ec4899', '#6366f1'];
+  const color = colors[id.charCodeAt(0) % colors.length];
+  return (
+    <div
+      className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
+      style={{ background: color }}
+    >
+      {(firstName[0] || '').toUpperCase()}{(lastName[0] || '').toUpperCase()}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Section 1 -- Rule Effectiveness
+// ─────────────────────────────────────────
+function RuleEffectivenessSection({
+  data,
+  isLoading,
+  error,
+  onRetry,
+}: {
+  data: RuleEffectivenessItem[] | null;
+  isLoading: boolean;
+  error?: string | null;
+  onRetry?: () => void;
+}) {
+  const [sortField, setSortField] = useState<string>('trigger_count');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+
+  function handleSort(field: string) {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDir('desc'); }
+  }
+
+  const sorted = data ? [...data].sort((a, b) => {
+    const av = (a as any)[sortField] ?? 0;
+    const bv = (b as any)[sortField] ?? 0;
+    return sortDir === 'asc' ? av - bv : bv - av;
+  }) : [];
+
+  // Bar chart data -- top 8 rules by trigger count
+  const barData = data
+    ? [...data].sort((a, b) => b.trigger_count - a.trigger_count).slice(0, 8)
+    : [];
+
+  return (
+    <div className="bg-[#131929] border border-[#1E2535] rounded-xl overflow-hidden">
+      <div className="px-5 py-4 border-b border-[#1E2535]">
+        <p className="text-sm font-semibold text-[#F1F3FA]">Rule Effectiveness</p>
+        <p className="text-xs text-[#4A4F6A] mt-0.5">
+          Trigger rates and accuracy per detection rule
+        </p>
+      </div>
+
+      {isLoading ? (
+        <div className="h-48 flex items-center justify-center">
+          <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : error ? (
+        <div className="h-48 flex flex-col items-center justify-center text-center">
+          <AlertTriangle size={28} className="text-red-400 mb-2" />
+          <p className="text-xs text-red-400">Unable to load data</p>
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              className="mt-2 text-xs text-blue-400 hover:text-blue-300 underline"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      ) : !data || data.length === 0 ? (
+        <div className="h-48 flex flex-col items-center justify-center">
+          <Shield size={28} className="text-[#1E2535] mb-2" />
+          <p className="text-xs text-[#4A4F6A]">No rule trigger data for this period</p>
+        </div>
+      ) : (
+        <>
+          {/* Horizontal bar chart */}
+          <div className="px-5 pt-4 pb-2">
+            <p className="text-xs text-[#4A4F6A] uppercase tracking-widest mb-3">
+              Top Rules by Trigger Count
+            </p>
+            <div className="space-y-2">
+              {barData.map(rule => {
+                const maxCount = barData[0]?.trigger_count || 1;
+                const barWidth = Math.max((rule.trigger_count / maxCount) * 100, 2);
+                const isHl = highlighted === rule.id;
+
+                return (
+                  <div
+                    key={rule.id}
+                    onClick={() => setHighlighted(prev => prev === rule.id ? null : rule.id)}
+                    className={clsx(
+                      'flex items-center gap-3 cursor-pointer rounded-lg px-2 py-1.5 transition-colors',
+                      isHl ? 'bg-white/5' : 'hover:bg-white/[0.02]'
+                    )}
+                  >
+                    <p className="text-xs text-[#8B8FA8] w-36 truncate shrink-0">{rule.name}</p>
+                    <div className="flex-1 h-2 bg-[#1E2535] rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${barWidth}%`,
+                          background: fpRateColor(rule.fp_rate),
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono text-[#F1F3FA] w-8 text-right shrink-0">
+                      {rule.trigger_count}
+                    </span>
+                    <span
+                      className="text-xs w-14 text-right shrink-0"
+                      style={{ color: fpRateColor(rule.fp_rate) }}
+                    >
+                      {rule.fp_rate}% FP
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {/* FP rate color legend */}
+            <div className="flex items-center gap-4 mt-3 pb-2">
+              <p className="text-xs text-[#4A4F6A]">Bar color by FP rate:</p>
+              {[
+                { label: 'Low (<25%)', color: '#34d399' },
+                { label: 'Med (25-50%)', color: '#f59e0b' },
+                { label: 'High (>50%)', color: '#ef4444' },
+              ].map(({ label, color }) => (
+                <div key={label} className="flex items-center gap-1.5 text-xs text-[#8B8FA8]">
+                  <span className="w-2 h-2 rounded-sm" style={{ background: color }} />
+                  {label}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Sortable table */}
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-t border-[#1E2535]">
+                  {[
+                    { label: 'Rule Name', field: 'name' },
+                    { label: 'Type', field: 'type' },
+                    { label: 'Triggers', field: 'trigger_count' },
+                    { label: 'TP Rate', field: 'tp_rate' },
+                    { label: 'FP Rate', field: 'fp_rate' },
+                    { label: 'Avg Score', field: 'avg_contribution' },
+                    { label: 'Trend', field: 'trend' },
+                  ].map(col => (
+                    <th key={col.field} className="px-4 py-2.5 text-left">
+                      <SortHeader
+                        label={col.label}
+                        field={col.field}
+                        current={sortField}
+                        direction={sortDir}
+                        onClick={handleSort}
+                      />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(rule => {
+                  const isHl = highlighted === rule.id;
+                  return (
+                    <tr
+                      key={rule.id}
+                      onClick={() => setHighlighted(p => p === rule.id ? null : rule.id)}
+                      className={clsx(
+                        'border-t border-[#1E2535] cursor-pointer transition-colors',
+                        isHl ? 'bg-blue-500/5' : 'hover:bg-white/[0.02]',
+                        !rule.is_active && 'opacity-40'
+                      )}
+                    >
+                      <td className="px-4 py-2.5">
+                        <p className="text-xs font-medium text-[#F1F3FA] truncate max-w-36">
+                          {rule.name}
+                        </p>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <RuleTypeBadge type={rule.type} />
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className="text-xs font-mono text-[#F1F3FA]">
+                          {rule.trigger_count}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className="text-xs font-mono text-emerald-400">
+                          {rule.tp_rate}%
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-12 h-1.5 bg-[#1E2535] rounded-full overflow-hidden">
+                            <div
+                              className="h-full rounded-full"
+                              style={{
+                                width: `${rule.fp_rate}%`,
+                                background: fpRateColor(rule.fp_rate),
+                              }}
+                            />
+                          </div>
+                          <span
+                            className="text-xs font-mono"
+                            style={{ color: fpRateColor(rule.fp_rate) }}
+                          >
+                            {rule.fp_rate}%
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className="text-xs font-mono text-[#8B8FA8]">
+                          +{rule.avg_contribution}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={clsx(
+                          'text-xs font-mono font-medium',
+                          rule.trend > 0 ? 'text-red-400' :
+                            rule.trend < 0 ? 'text-emerald-400' :
+                              'text-[#4A4F6A]'
+                        )}>
+                          {rule.trend > 0 ? '+' : ''}{rule.trend}%
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Section 2 -- Alert Resolution Chart
+// ─────────────────────────────────────────
+function ResolutionSection({
+  resolutionData,
+  isLoading,
+  groupBy,
+  error,
+  onRetry,
+}: {
+  resolutionData: ResolutionData | null;
+  isLoading: boolean;
+  groupBy: 'hour' | 'day';
+  error?: string | null;
+  onRetry?: () => void;
+}) {
+  const tickInterval = resolutionData
+    ? Math.max(1, Math.floor(resolutionData.data.length / 8))
+    : 1;
+
+  const RESOLUTION_COLORS = {
+    dismiss: '#64748b',
+    investigate: '#a78bfa',
+    escalate: '#ef4444',
+  };
+
+  return (
+    <div className="bg-[#131929] border border-[#1E2535] rounded-xl p-5">
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <p className="text-sm font-semibold text-[#F1F3FA]">Alert Resolution</p>
+          <p className="text-xs text-[#4A4F6A] mt-0.5">
+            How alerts are being closed over time
+          </p>
+        </div>
+        {/* Legend */}
+        <div className="flex items-center gap-3">
+          {[
+            { key: 'dismiss', label: 'Dismissed', color: RESOLUTION_COLORS.dismiss },
+            { key: 'investigate', label: 'Investigated', color: RESOLUTION_COLORS.investigate },
+            { key: 'escalate', label: 'Escalated', color: RESOLUTION_COLORS.escalate },
+          ].map(({ key, label, color }) => (
+            <div key={key} className="flex items-center gap-1.5 text-xs text-[#8B8FA8]">
+              <span className="w-2.5 h-2.5 rounded-sm" style={{ background: color }} />
+              {label}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="h-44 flex items-center justify-center">
+          <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : error ? (
+        <div className="h-44 flex flex-col items-center justify-center text-center">
+          <AlertTriangle size={28} className="text-red-400 mb-2" />
+          <p className="text-xs text-red-400">Unable to load data</p>
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              className="mt-2 text-xs text-blue-400 hover:text-blue-300 underline"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      ) : !resolutionData || resolutionData.data.every(d => d.total === 0) ? (
+        <div className="h-44 flex flex-col items-center justify-center">
+          <Activity size={28} className="text-[#1E2535] mb-2" />
+          <p className="text-xs text-[#4A4F6A]">No resolution data for this period</p>
+        </div>
+      ) : (
+        <>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart
+              data={resolutionData.data}
+              margin={{ top: 4, right: 4, left: -20, bottom: 0 }}
+              barSize={groupBy === 'hour' ? 8 : 16}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#1E2535" vertical={false} />
+              <XAxis
+                dataKey="period"
+                tick={{ fontSize: 10, fill: '#4A4F6A' }}
+                tickFormatter={v => formatAxisLabel(v, groupBy)}
+                axisLine={false}
+                tickLine={false}
+                interval={tickInterval}
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: '#4A4F6A' }}
+                axisLine={false}
+                tickLine={false}
+                allowDecimals={false}
+              />
+              <Tooltip
+                contentStyle={{
+                  background: '#0D0F1A',
+                  border: '1px solid #1E2535',
+                  borderRadius: 12,
+                  fontSize: 11,
+                  color: '#F1F3FA',
+                }}
+                cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+              />
+              <Bar dataKey="dismiss" stackId="a" fill={RESOLUTION_COLORS.dismiss} radius={[0, 0, 0, 0]} />
+              <Bar dataKey="investigate" stackId="a" fill={RESOLUTION_COLORS.investigate} radius={[0, 0, 0, 0]} />
+              <Bar dataKey="escalate" stackId="a" fill={RESOLUTION_COLORS.escalate} radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+
+          {/* Summary stats */}
+          {resolutionData.summary && (
+            <div className="grid grid-cols-4 gap-3 mt-4 pt-4 border-t border-[#1E2535]">
+              {[
+                {
+                  label: 'Total Resolved',
+                  value: resolutionData.summary.total_resolved.toString(),
+                  color: 'text-[#F1F3FA]',
+                },
+                {
+                  label: 'Resolution Rate',
+                  value: `${resolutionData.summary.resolution_rate}%`,
+                  color: resolutionData.summary.resolution_rate >= 70 ? 'text-emerald-400' : 'text-amber-400',
+                },
+                {
+                  label: 'Avg Time to Dismiss',
+                  value: resolutionData.summary.avg_time_dismiss,
+                  color: 'text-[#8B8FA8]',
+                },
+                {
+                  label: 'Avg Time to Escalate',
+                  value: resolutionData.summary.avg_time_escalate,
+                  color: 'text-[#8B8FA8]',
+                },
+              ].map(({ label, value, color }) => (
+                <div key={label}>
+                  <p className="text-xs text-[#4A4F6A]">{label}</p>
+                  <p className={clsx('text-lg font-bold font-mono mt-0.5', color)}>{value}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Section 3 -- Analyst Performance Table
+// ─────────────────────────────────────────
+function AnalystPerformanceSection({
+  data,
+  isLoading,
+  error,
+  onRetry,
+}: {
+  data: AnalystPerformanceItem[] | null;
+  isLoading: boolean;
+  error?: string | null;
+  onRetry?: () => void;
+}) {
+  const [sortField, setSortField] = useState<string>('total_reviewed');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  function handleSort(field: string) {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDir('desc'); }
+  }
+
+  const sorted = data ? [...data].sort((a, b) => {
+    const av = (a as any)[sortField] ?? 0;
+    const bv = (b as any)[sortField] ?? 0;
+    if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortDir === 'asc' ? av - bv : bv - av;
+  }) : [];
+
+  function escalationColor(rate: number): string {
+    if (rate >= 50) return '#ef4444';
+    if (rate >= 20) return '#f59e0b';
+    return '#34d399';
+  }
+
+  return (
+    <div className="bg-[#131929] border border-[#1E2535] rounded-xl overflow-hidden">
+      <div className="px-5 py-4 border-b border-[#1E2535]">
+        <p className="text-sm font-semibold text-[#F1F3FA]">Analyst Performance</p>
+        <p className="text-xs text-[#4A4F6A] mt-0.5">
+          Per-analyst alert review activity for the selected period
+        </p>
+      </div>
+
+      {isLoading ? (
+        <div className="h-40 flex items-center justify-center">
+          <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : error ? (
+        <div className="h-40 flex flex-col items-center justify-center text-center">
+          <AlertTriangle size={28} className="text-red-400 mb-2" />
+          <p className="text-xs text-red-400">Unable to load data</p>
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              className="mt-2 text-xs text-blue-400 hover:text-blue-300 underline"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      ) : !data || data.length === 0 ? (
+        <div className="h-40 flex flex-col items-center justify-center">
+          <Users size={28} className="text-[#1E2535] mb-2" />
+          <p className="text-xs text-[#4A4F6A]">No analyst activity in this period</p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-[#1E2535]">
+                <th className="px-5 py-2.5 text-left w-44">
+                  <SortHeader label="Analyst" field="last_name" current={sortField} direction={sortDir} onClick={handleSort} />
+                </th>
+                <th className="px-4 py-2.5 text-left">
+                  <SortHeader label="Reviewed" field="total_reviewed" current={sortField} direction={sortDir} onClick={handleSort} />
+                </th>
+                <th className="px-4 py-2.5 text-left">
+                  <SortHeader label="Dismissed" field="dismissed" current={sortField} direction={sortDir} onClick={handleSort} />
+                </th>
+                <th className="px-4 py-2.5 text-left">
+                  <SortHeader label="Escalated" field="escalated" current={sortField} direction={sortDir} onClick={handleSort} />
+                </th>
+                <th className="px-4 py-2.5 text-left">
+                  <SortHeader label="Investigated" field="investigated" current={sortField} direction={sortDir} onClick={handleSort} />
+                </th>
+                <th className="px-4 py-2.5 text-left">
+                  <SortHeader label="Avg Time" field="avg_response_seconds" current={sortField} direction={sortDir} onClick={handleSort} />
+                </th>
+                <th className="px-4 py-2.5 text-left">
+                  <SortHeader label="Escalation Rate" field="escalation_rate" current={sortField} direction={sortDir} onClick={handleSort} />
+                </th>
+                <th className="px-4 py-2.5 text-left">
+                  <SortHeader label="FP Rate" field="fp_rate" current={sortField} direction={sortDir} onClick={handleSort} />
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(analyst => (
+                <tr
+                  key={analyst.id}
+                  className="border-b border-[#1E2535] last:border-0 hover:bg-white/[0.02] transition-colors"
+                >
+                  {/* Name */}
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2.5">
+                      <AnalystAvatar
+                        firstName={analyst.first_name}
+                        lastName={analyst.last_name}
+                        id={analyst.id}
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-[#F1F3FA] truncate">
+                          {analyst.first_name} {analyst.last_name}
+                        </p>
+                        <p className="text-xs text-[#4A4F6A] truncate">{analyst.email}</p>
+                      </div>
+                    </div>
+                  </td>
+
+                  {/* Reviewed */}
+                  <td className="px-4 py-3">
+                    <span className="text-sm font-bold font-mono text-[#F1F3FA]">
+                      {analyst.total_reviewed}
+                    </span>
+                  </td>
+
+                  {/* Dismissed */}
+                  <td className="px-4 py-3">
+                    <span className="text-xs font-mono text-[#8B8FA8]">{analyst.dismissed}</span>
+                  </td>
+
+                  {/* Escalated */}
+                  <td className="px-4 py-3">
+                    <span className="text-xs font-mono text-red-400">{analyst.escalated}</span>
+                  </td>
+
+                  {/* Investigated */}
+                  <td className="px-4 py-3">
+                    <span className="text-xs font-mono text-purple-400">{analyst.investigated}</span>
+                  </td>
+
+                  {/* Avg response time */}
+                  <td className="px-4 py-3">
+                    <span className="text-xs font-mono text-[#8B8FA8]">
+                      {analyst.avg_response_formatted}
+                    </span>
+                  </td>
+
+                  {/* Escalation rate bar */}
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-16 h-1.5 bg-[#1E2535] rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all"
+                          style={{
+                            width: `${analyst.escalation_rate}%`,
+                            background: escalationColor(analyst.escalation_rate),
+                          }}
+                        />
+                      </div>
+                      <span
+                        className="text-xs font-mono font-medium"
+                        style={{ color: escalationColor(analyst.escalation_rate) }}
+                      >
+                        {analyst.escalation_rate}%
+                      </span>
+                    </div>
+                  </td>
+
+                  {/* FP rate */}
+                  <td className="px-4 py-3">
+                    <span
+                      className="text-xs font-mono"
+                      style={{ color: fpRateColor(analyst.fp_rate) }}
+                    >
+                      {analyst.fp_rate}%
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
 // Date range controls
 // ─────────────────────────────────────────
 function DateRangeControls({
@@ -391,6 +1102,17 @@ export default function AnalyticsPage() {
   const [volumeError, setVolumeError] = useState<string | null>(null);
   const [severityError, setSeverityError] = useState<string | null>(null);
 
+  // Add inside AnalyticsPage, after existing state:
+  const [ruleEffectiveness, setRuleEffectiveness] = useState<RuleEffectivenessItem[] | null>(null);
+  const [resolutionData, setResolutionData] = useState<ResolutionData | null>(null);
+  const [analystPerformance, setAnalystPerformance] = useState<AnalystPerformanceItem[] | null>(null);
+  const [isLoadingRules, setIsLoadingRules] = useState(true);
+  const [isLoadingResolution, setIsLoadingResolution] = useState(true);
+  const [isLoadingAnalysts, setIsLoadingAnalysts] = useState(true);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+  const [resolutionError, setResolutionError] = useState<string | null>(null);
+  const [analystsError, setAnalystsError] = useState<string | null>(null);
+
   // ── Build query params from current date range ─────────────────
   function buildParams(): string {
     if (preset === 'custom') {
@@ -416,6 +1138,9 @@ export default function AnalyticsPage() {
       setIsLoadingOverview(true);
       setIsLoadingVolume(true);
       setIsLoadingSeverity(true);
+      setIsLoadingRules(true);
+      setIsLoadingResolution(true);
+      setIsLoadingAnalysts(true);
     } else {
       setIsRefreshing(true);
     }
@@ -423,8 +1148,11 @@ export default function AnalyticsPage() {
     setOverviewError(null);
     setVolumeError(null);
     setSeverityError(null);
+    setRulesError(null);
+    setResolutionError(null);
+    setAnalystsError(null);
 
-    // Run all 3 fetches in parallel
+    // Run all fetches in parallel
     await Promise.allSettled([
       apiFetch(`/api/v1/analytics/overview?${params}`, {}, token)
         .then(async (r) => {
@@ -487,6 +1215,48 @@ export default function AnalyticsPage() {
         .finally(() => {
           if (!silent) setIsLoadingSeverity(false);
         }),
+
+      apiFetch(`/api/v1/analytics/rule-effectiveness?${params}`, {}, token)
+        .then(async (r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const data = await r.json();
+          setRuleEffectiveness(data?.data || []);
+        })
+        .catch(err => {
+          console.error('Failed to fetch rule effectiveness:', err);
+          setRulesError(err.message || 'Failed to load');
+        })
+        .finally(() => {
+          if (!silent) setIsLoadingRules(false);
+        }),
+
+      apiFetch(`/api/v1/analytics/resolution?${params}`, {}, token)
+        .then(async (r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const data = await r.json();
+          setResolutionData(data);
+        })
+        .catch(err => {
+          console.error('Failed to fetch resolution analytics:', err);
+          setResolutionError(err.message || 'Failed to load');
+        })
+        .finally(() => {
+          if (!silent) setIsLoadingResolution(false);
+        }),
+
+      apiFetch(`/api/v1/analytics/analyst-performance?${params}`, {}, token)
+        .then(async (r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const data = await r.json();
+          setAnalystPerformance(data?.data || []);
+        })
+        .catch(err => {
+          console.error('Failed to fetch analyst performance:', err);
+          setAnalystsError(err.message || 'Failed to load');
+        })
+        .finally(() => {
+          if (!silent) setIsLoadingAnalysts(false);
+        }),
     ]);
 
     setIsRefreshing(false);
@@ -526,19 +1296,21 @@ export default function AnalyticsPage() {
   useEffect(() => {
     if (!connected) return;
 
-    emit('subscribe', { channels: ['alerts'] });
+    emit('subscribe', { channels: ['alerts', 'rules'] });
 
-    const handleAlertEvent = () => {
+    const handleRealtimeEvent = () => {
       triggerRealtimeRefresh();
     };
 
-    on('alert:new', handleAlertEvent);
-    on('alert:updated', handleAlertEvent);
+    on('alert:new', handleRealtimeEvent);
+    on('alert:updated', handleRealtimeEvent);
+    on('rule:updated', handleRealtimeEvent);
 
     return () => {
-      off('alert:new', handleAlertEvent);
-      off('alert:updated', handleAlertEvent);
-      emit('unsubscribe', { channels: ['alerts'] });
+      off('alert:new', handleRealtimeEvent);
+      off('alert:updated', handleRealtimeEvent);
+      off('rule:updated', handleRealtimeEvent);
+      emit('unsubscribe', { channels: ['alerts', 'rules'] });
       if (refreshTimeoutRef.current) {
         clearTimeout(refreshTimeoutRef.current);
         refreshTimeoutRef.current = null;
@@ -849,6 +1621,29 @@ export default function AnalyticsPage() {
           {new Date(overview.period.to).toLocaleDateString('en-CA')}
         </p>
       )}
+
+      <RuleEffectivenessSection
+        data={ruleEffectiveness}
+        isLoading={isLoadingRules}
+        error={rulesError}
+        onRetry={() => fetchAll()}
+      />
+
+      <div className="grid grid-cols-2 gap-4">
+        <ResolutionSection
+          resolutionData={resolutionData}
+          isLoading={isLoadingResolution}
+          groupBy={resolutionData?.group_by || (preset === '24h' ? 'hour' : 'day')}
+          error={resolutionError}
+          onRetry={() => fetchAll()}
+        />
+        <AnalystPerformanceSection
+          data={analystPerformance}
+          isLoading={isLoadingAnalysts}
+          error={analystsError}
+          onRetry={() => fetchAll()}
+        />
+      </div>
     </div>
   );
 }

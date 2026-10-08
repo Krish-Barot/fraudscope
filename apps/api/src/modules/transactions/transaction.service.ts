@@ -268,7 +268,7 @@ export async function searchGlobalService(queryStr: string) {
 
   const accountIds = matchingAccountsRaw.map((a) => a.account_id);
 
-  let alertCountsMap: Record<string, number> = {};
+  const alertCountsMap: Record<string, number> = {};
   if (accountIds.length > 0) {
     const alertRows = await db('alerts')
       .join('transactions', 'alerts.transaction_id', 'transactions.id')

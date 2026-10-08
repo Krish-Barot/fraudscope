@@ -39,7 +39,7 @@ const accounts = generateAccounts();
 console.log(`Generated ${accounts.length} mock account profiles`);
 
 // Statistics tracking — printed every 10 seconds
-let stats = {
+const stats = {
   sent: 0,
   succeeded: 0,
   failed: 0,

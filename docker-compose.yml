@@ -71,6 +71,8 @@ services:
     build: 
       context: . # build using Dockerfile in apps/api
       dockerfile: apps/api/Dockerfile
+      target: development
+    command: ["npm", "run", "dev", "--workspace=apps/api"]
     container_name: fraudscope_api
     environment:
       NODE_ENV: development

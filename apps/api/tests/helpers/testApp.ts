@@ -10,6 +10,7 @@ import transactionRoutes from '../../src/modules/transactions/transaction.routes
 import rulesRoutes from '../../src/modules/rules/rules.routes';
 import alertsRoutes from '../../src/modules/alerts/alerts.routes';
 import usersRoutes from '../../src/modules/users/users.routes';
+import analyticsRoutes from '../../src/modules/analytics/analytics.routes';
 
 export function createTestApp() {
   const app = express();
@@ -26,6 +27,7 @@ export function createTestApp() {
   app.use('/api/v1/rules', rulesRoutes);
   app.use('/api/v1/alerts', alertsRoutes);
   app.use('/api/v1/users', usersRoutes);
+  app.use('/api/v1/analytics', analyticsRoutes);
   app.use(errorHandler);
 
   return app;

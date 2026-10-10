@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "build": "tsc",
+    "build": "tsc --outDir dist",
     "worker": "tsx src/engine/worker.ts",
     "simulate": "tsx src/simulator/index.ts",
     "migrate": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:latest --knexfile src/config/knexfile.js",

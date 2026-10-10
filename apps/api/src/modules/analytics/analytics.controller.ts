@@ -280,8 +280,8 @@ export async function getAlertVolume(
                 'severity',
                 db.raw('COUNT(*) as count')
             )
-            .groupBy(db.raw(truncFn), 'severity')
-            .orderBy(db.raw(truncFn), 'asc') as any[];
+            .groupByRaw(`${truncFn}, severity`)
+            .orderByRaw(`${truncFn} asc`) as any[];
 
         // Build complete time grid -- no gaps in the series
         const periodMap = new Map<string, Record<string, number>>();
@@ -290,11 +290,24 @@ export async function getAlertVolume(
             : 24 * 60 * 60 * 1000;
 
         let cursor = new Date(from);
-        while (cursor <= to) {
+        if (groupBy === 'day') {
+            cursor.setUTCHours(0, 0, 0, 0);
+        } else {
+            cursor.setUTCMinutes(0, 0, 0);
+        }
+
+        const endBoundary = new Date(to);
+        if (groupBy === 'day') {
+            endBoundary.setUTCHours(23, 59, 59, 999);
+        }
+
+        while (cursor <= endBoundary) {
             const key = groupBy === 'hour'
                 ? cursor.toISOString().slice(0, 13) + ':00'
                 : cursor.toISOString().slice(0, 10);
-            periodMap.set(key, { low: 0, medium: 0, high: 0, critical: 0 });
+            if (!periodMap.has(key)) {
+                periodMap.set(key, { low: 0, medium: 0, high: 0, critical: 0 });
+            }
             cursor = new Date(cursor.getTime() + intervalMs);
         }
 
@@ -302,17 +315,26 @@ export async function getAlertVolume(
             const key = groupBy === 'hour'
                 ? new Date(row.period).toISOString().slice(0, 13) + ':00'
                 : new Date(row.period).toISOString().slice(0, 10);
-            const entry = periodMap.get(key);
-            if (entry && ['low', 'medium', 'high', 'critical'].includes(row.severity)) {
-                entry[row.severity] = parseInt(row.count, 10);
+            let entry = periodMap.get(key);
+            if (!entry) {
+                entry = { low: 0, medium: 0, high: 0, critical: 0 };
+                periodMap.set(key, entry);
+            }
+            if (['low', 'medium', 'high', 'critical'].includes(row.severity)) {
+                entry[row.severity] = parseInt(row.count, 10) || 0;
             }
         });
 
-        const data = Array.from(periodMap.entries()).map(([period, counts]) => ({
-            period,
-            ...counts,
-            total: counts.low + counts.medium + counts.high + counts.critical,
-        }));
+        const data = Array.from(periodMap.entries())
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([period, counts]) => ({
+                period,
+                low: Number(counts.low) || 0,
+                medium: Number(counts.medium) || 0,
+                high: Number(counts.high) || 0,
+                critical: Number(counts.critical) || 0,
+                total: (Number(counts.low) || 0) + (Number(counts.medium) || 0) + (Number(counts.high) || 0) + (Number(counts.critical) || 0),
+            }));
 
         const payload = { group_by: groupBy, data };
         await setCached(cacheKey, payload);
@@ -569,8 +591,8 @@ export async function getResolution(
                     db.raw('COUNT(*) as count'),
                     db.raw("AVG(EXTRACT(EPOCH FROM (aa.created_at - a.created_at))) as avg_seconds"),
                 )
-                .groupBy(db.raw(truncFn), 'aa.action')
-                .orderBy(db.raw(truncFn), 'asc'),
+                .groupByRaw(`${truncFn}, aa.action`)
+                .orderByRaw(`${truncFn} asc`),
 
             db('alerts')
                 .where('created_at', '>=', from)
@@ -597,11 +619,24 @@ export async function getResolution(
             : 24 * 60 * 60 * 1000;
 
         let cursor = new Date(from);
-        while (cursor <= to) {
+        if (groupBy === 'day') {
+            cursor.setUTCHours(0, 0, 0, 0);
+        } else {
+            cursor.setUTCMinutes(0, 0, 0);
+        }
+
+        const endBoundary = new Date(to);
+        if (groupBy === 'day') {
+            endBoundary.setUTCHours(23, 59, 59, 999);
+        }
+
+        while (cursor <= endBoundary) {
             const key = groupBy === 'hour'
                 ? cursor.toISOString().slice(0, 13) + ':00'
                 : cursor.toISOString().slice(0, 10);
-            periodMap.set(key, { dismiss: 0, escalate: 0, investigate: 0 });
+            if (!periodMap.has(key)) {
+                periodMap.set(key, { dismiss: 0, escalate: 0, investigate: 0 });
+            }
             cursor = new Date(cursor.getTime() + intervalMs);
         }
 
@@ -609,17 +644,25 @@ export async function getResolution(
             const key = groupBy === 'hour'
                 ? new Date(row.period).toISOString().slice(0, 13) + ':00'
                 : new Date(row.period).toISOString().slice(0, 10);
-            const entry = periodMap.get(key);
-            if (entry && ['dismiss', 'escalate', 'investigate'].includes(row.action)) {
-                entry[row.action] = parseInt(row.count, 10);
+            let entry = periodMap.get(key);
+            if (!entry) {
+                entry = { dismiss: 0, escalate: 0, investigate: 0 };
+                periodMap.set(key, entry);
+            }
+            if (['dismiss', 'escalate', 'investigate'].includes(row.action)) {
+                entry[row.action] = parseInt(row.count, 10) || 0;
             }
         });
 
-        const timeSeries = Array.from(periodMap.entries()).map(([period, counts]) => ({
-            period,
-            ...counts,
-            total: counts.dismiss + counts.escalate + counts.investigate,
-        }));
+        const timeSeries = Array.from(periodMap.entries())
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([period, counts]) => ({
+                period,
+                dismiss: Number(counts.dismiss) || 0,
+                escalate: Number(counts.escalate) || 0,
+                investigate: Number(counts.investigate) || 0,
+                total: (Number(counts.dismiss) || 0) + (Number(counts.escalate) || 0) + (Number(counts.investigate) || 0),
+            }));
 
         const summaryMap: Record<string, { count: number; avg_seconds: number }> = {};
         (actionSummary as any[]).forEach((row: any) => {

@@ -1,472 +1,332 @@
 # FraudScope
 
-Real-time financial transaction fraud detection dashboard built for banking and fintech teams.
+**FraudScope** is a real-time financial transaction fraud detection platform built for banking and fintech operations teams. It ingests transactions via REST API, evaluates them against five configurable fraud detection rules through a Redis Stream pipeline, scores each transaction from 0 to 100, and surfaces high-risk alerts to analysts through a live dashboard with Socket.io-powered real-time updates. Analysts triage alerts in a priority queue, dismiss false positives, escalate confirmed fraud, and track performance through a full analytics suite — all with a complete audit trail of every decision.
 
-## Architecture
+**Live demo:** [fraudscope.vercel.app](https://fraudscope.vercel.app) &nbsp;|&nbsp; **API:** [fraudscope-api.railway.app](https://fraudscope-api.railway.app/health)
 
-```
-┌─────────────────┐     POST /tx      ┌──────────────────┐
-│   Transaction   │ ─────────────────► │   API Server     │
-│   Source/Sim    │                    │   (Express)      │
-└─────────────────┘                    └────────┬─────────┘
-                                                │
-                                    ┌───────────┼───────────┐
-                                    ▼           ▼           ▼
-                             PostgreSQL     Redis        Socket.io
-                             (storage)   (Streams +    (real-time
-                                          Pub/Sub)      events)
-                                                │
-                                       ┌────────┴────────┐
-                                       │  Rule Engine    │
-                                       │    Worker       │
-                                       │ (5 fraud rules) │
-                                       └─────────────────┘
-                                                │
-                                    Alert generated (score ≥ 20)
-                                                │
-                                       ┌────────▼────────┐
-                                       │ Next.js Frontend│
-                                       │  Live Feed      │
-                                       │  Alert Queue    │
-                                       │  Analytics      │
-                                       └─────────────────┘
-```
-
-**Stack:**
-- **Backend:** Node.js 20, Express, TypeScript, Knex.js
-- **Frontend:** Next.js 14 App Router, Tailwind CSS, Recharts
-- **Database:** PostgreSQL 16
-- **Cache/Queue:** Redis 7 (Streams + Pub/Sub)
-- **Real-time:** Socket.io
-- **Containerization:** Docker, Docker Compose
-- **CI/CD:** GitHub Actions, Railway (API), Vercel (Web)
+Demo credentials: `analyst@fraudscope.dev` / `analyst123`
 
 ---
 
-## Local Development
+## What it does
 
-### Prerequisites
+```
+External system sends transaction
+          │
+          ▼
+  POST /api/v1/transactions
+  (REST API, API key auth)
+          │
+          ▼
+  PostgreSQL  ──►  Redis Stream (tx:incoming)
+                          │
+                          ▼
+               ┌─────────────────────┐
+               │   Rule Engine       │
+               │   Worker Process    │
+               │                     │
+               │  Velocity Check     │
+               │  Amount Anomaly     │
+               │  Geo Mismatch       │
+               │  Time Anomaly       │
+               │  Round Amount       │
+               │                     │
+               │  Composite score    │
+               │  0 – 100            │
+               └────────┬────────────┘
+                        │
+              score ≥ 20 → Alert created
+                        │
+                        ▼
+              Redis Pub/Sub (alerts:new)
+                        │
+                        ▼
+           ┌────────────────────────┐
+           │   Socket.io Gateway    │
+           │   (WebSocket server)   │
+           └────────────┬───────────┘
+                        │
+                        ▼
+           ┌────────────────────────┐
+           │   Next.js Dashboard    │
+           │                        │
+           │   Live Transaction     │
+           │   Feed                 │
+           │                        │
+           │   Alert Queue          │
+           │   (triage, dismiss,    │
+           │    escalate)           │
+           │                        │
+           │   Analytics            │
+           │   (charts, trends)     │
+           │                        │
+           │   Admin Console        │
+           │   (rules, users,       │
+           │    audit logs,         │
+           │    system health)      │
+           └────────────────────────┘
+```
 
-- Docker Desktop
-- Node.js 20+
-- Git
+---
 
-### Setup
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| **Frontend** | Next.js 14 App Router, TypeScript, Tailwind CSS, Recharts, Socket.io-client, Leaflet |
+| **Backend** | Node.js 20, Express, TypeScript |
+| **Database** | PostgreSQL 16 (Knex.js migrations, query-optimized with 17 indexes) |
+| **Cache / Queue** | Redis 7 (Streams for async pipeline, Pub/Sub for real-time events, cache for analytics) |
+| **Real-time** | Socket.io (JWT-authenticated WebSocket gateway) |
+| **Auth** | JWT (15-min access token in memory + 7-day refresh token in httpOnly cookie) |
+| **Testing** | Jest + Supertest (30+ integration tests, real PostgreSQL + Redis) |
+| **CI/CD** | GitHub Actions (lint + test + build on every PR, deploy on merge to main) |
+| **Deployment** | Railway (API + Worker), Vercel (frontend), Docker multi-stage builds |
+
+---
+
+## Fraud detection rules
+
+The rule engine evaluates five configurable patterns in parallel. Each rule contributes a weighted score. The composite score is capped at 100 and mapped to a severity level.
+
+| Rule | What it detects | Score contribution |
+|---|---|---|
+| **Velocity** | Too many transactions within a rolling time window | 15 – 25 |
+| **Amount Anomaly** | Amount significantly above the account's 30-day average | 20 – 30 |
+| **Geo Mismatch** | Transaction from an unknown or high-risk country | 20 – 25 |
+| **Time Anomaly** | Transaction during configurable suspicious hours | 15 |
+| **Round Amount** | Suspiciously round amounts above a threshold | 15 – 25 |
+
+| Score | Severity | Action |
+|---|---|---|
+| 0 – 19 | — | No alert created |
+| 20 – 39 | Low | Alert created |
+| 40 – 59 | Medium | Alert created |
+| 60 – 79 | High | Alert created |
+| 80 – 100 | **Critical** | Alert created, immediate review required |
+
+Rules are fully configurable via the admin dashboard — create, edit, toggle, and tune parameters without redeploying.
+
+---
+
+## Local setup
+
+**Prerequisites:** Docker Desktop, Node.js 20+, Git
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/fraudscope.git
+# 1. Clone the repository
+git clone https://github.com/Krish-Barot/fraudscope.git
 cd fraudscope
 
-# Copy environment variables
+# 2. Configure environment
 cp .env.example .env
-# Edit .env with your values
+# The defaults in .env.example work for local development
 
-# Start all services
+# 3. Start all services (PostgreSQL, Redis, API, Worker, Next.js)
 docker compose up --build -d
 
-# Run database migrations
+# 4. Run database migrations
 docker compose exec api sh -c "cd apps/api && npm run migrate"
 
-# Seed initial data (2 users, 5 rules, 1000 transactions)
+# 5. Seed initial data (2 users, 5 detection rules, 1000 transactions)
 docker compose exec api sh -c "cd apps/api && npm run seed"
 ```
 
-### Default credentials
+Open [http://localhost:3000](http://localhost:3000).
 
-| Role | Email | Password |
+| Credential | Email | Password |
 |---|---|---|
 | Analyst | analyst@fraudscope.dev | analyst123 |
 | Admin | admin@fraudscope.dev | admin123 |
 
-### Access
+---
 
-| Service | URL |
-|---|---|
-| Dashboard | http://localhost:3000 |
-| API | http://localhost:3002 |
-| API Health | http://localhost:3002/health |
+## Running tests
 
-### Run the transaction simulator
+Tests run against a real PostgreSQL and Redis instance (no mocks). The test database is separate from the development database.
 
 ```bash
-# Generate test transactions at 3/sec with 20% fraud ratio
+# Run the full test suite
+docker compose exec api sh -c "cd apps/api && npm test"
+
+# Run a single test file
+docker compose exec api sh -c "cd apps/api && npm test -- tests/alerts.test.ts"
+
+# Run with coverage report
+docker compose exec api sh -c "cd apps/api && npm test -- --coverage"
+```
+
+**Test coverage:**
+
+| Area | Tests | What is verified |
+|---|---|---|
+| Auth | 15 | Register, login, refresh, token expiry, protected routes |
+| Transactions | 13 | Ingest, list, filter, pagination, duplicate prevention |
+| Alerts | 15 | List, counts, full detail with rules and history |
+| Alert actions | 20 | State machine transitions, reason validation, audit trail |
+| Rules API | 22+ | CRUD, parameter validation per rule type, toggle, delete guard |
+| Rule engine | 140+ | All 5 rule modules, composite scoring, severity thresholds |
+
+---
+
+## Transaction simulator
+
+The built-in simulator generates realistic transactions with configurable fraud ratios, letting you populate the dashboard without external integrations.
+
+```bash
+# Generate transactions at 3/sec with 20% fraud
 cd apps/api
 SIM_ENABLED=true SIM_RATE=3 SIM_FRAUD_RATIO=0.2 npm run simulate
 ```
 
-### Run tests
+Open the dashboard and watch the Live Feed populate in real time. Flagged transactions appear with colored severity borders. Alerts surface in the Alert Queue automatically.
 
 ```bash
-docker compose exec api sh -c "cd apps/api && npm test"
+# High-volume stress test
+SIM_ENABLED=true SIM_RATE=10 SIM_FRAUD_RATIO=0.5 npm run simulate
 ```
 
 ---
 
-## Project Structure
+## API
+
+Full API reference: [docs/api.md](docs/api.md)
+
+Quick start:
+
+```bash
+# Get an access token
+TOKEN=$(curl -s -X POST http://localhost:3002/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"analyst@fraudscope.dev","password":"analyst123"}' \
+  | jq -r '.access_token')
+
+# Send a transaction
+curl -X POST http://localhost:3002/api/v1/transactions \
+  -H "x-api-key: dev_api_key_fraudscope" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_id": "TX-TEST-001",
+    "account_id": "ACC-DEMO",
+    "amount": 9999.00,
+    "currency": "CAD",
+    "country_code": "NG",
+    "merchant_name": "CRYPTO-EXCHANGE"
+  }'
+
+# Check the alert queue
+curl "http://localhost:3002/api/v1/alerts?status=new&sort=risk_score:desc" \
+  -H "Authorization: Bearer $TOKEN" | jq '.data[0] | {risk_score, severity, status}'
+```
+
+---
+
+## Performance
+
+All major database queries are under 10ms on the seed dataset (target was 100ms). See [docs/query-optimization.md](docs/query-optimization.md) for full EXPLAIN ANALYZE results.
+
+Key optimizations applied:
+
+```sql
+-- Alert queue (largest query, runs on every dashboard load)
+-- Before: Seq Scan + in-memory sort, 28ms
+-- After: Index Scan already sorted by risk_score, 2.8ms
+CREATE INDEX idx_alerts_status_score ON alerts(status, risk_score DESC);
+
+-- Audit log date filter (grows unboundedly — most critical index)
+-- Before: full table Seq Scan, 55ms
+-- After: Index Scan with early stop after 50 rows, 4.2ms
+CREATE INDEX idx_audit_created ON audit_logs(created_at DESC);
+
+-- Analytics are cached in Redis (5-min TTL, configurable)
+-- Cache hit: <1ms vs PostgreSQL: 15-55ms
+```
+
+---
+
+## Project structure
 
 ```
 fraudscope/
 ├── apps/
-│   ├── api/                        Backend
+│   ├── api/                        Node.js/Express backend
 │   │   ├── src/
-│   │   │   ├── config/             Env validation, database, Redis
-│   │   │   ├── engine/             Rule engine + worker
-│   │   │   │   ├── rules/          5 detection rules
-│   │   │   │   ├── scorer.ts       Composite scoring
-│   │   │   │   └── worker.ts       Redis Stream consumer
-│   │   │   ├── middleware/         Auth, authorize, errors
-│   │   │   ├── modules/            REST API modules
-│   │   │   │   ├── auth/
-│   │   │   │   ├── transactions/
-│   │   │   │   ├── alerts/
-│   │   │   │   ├── rules/
-│   │   │   │   ├── analytics/
-│   │   │   │   ├── audit/
-│   │   │   │   └── health/
-│   │   │   ├── websocket/          Socket.io gateway
-│   │   │   └── index.ts            Entry point
-│   │   ├── migrations/             Knex migrations
-│   │   ├── seeds/                  Seed data
-│   │   └── tests/                  Jest integration tests
-│   └── web/                        Frontend
-│       └── app/
-│           └── dashboard/
-│               ├── page.tsx        Live feed
-│               ├── alerts/         Alert queue
-│               ├── transactions/   Transaction detail
-│               ├── analytics/      Charts
-│               └── admin/          Rules, Users, Audit, System
+│   │   │   ├── engine/             Rule engine + Redis Stream worker
+│   │   │   │   ├── rules/          5 fraud detection rule modules
+│   │   │   │   ├── scorer.ts       Parallel rule evaluation + scoring
+│   │   │   │   └── worker.ts       XREADGROUP consumer with XAUTOCLAIM
+│   │   │   ├── modules/            REST API modules (auth, transactions,
+│   │   │   │                       alerts, rules, analytics, audit, health)
+│   │   │   ├── middleware/         JWT auth, RBAC, error handling
+│   │   │   ├── websocket/          Socket.io gateway (Redis Pub/Sub bridge)
+│   │   │   └── utils/              Analytics caching utility
+│   │   ├── migrations/             8 Knex migrations
+│   │   └── tests/                  Jest integration tests (30+ tests)
+│   └── web/                        Next.js 14 App Router frontend
+│       └── app/dashboard/
+│           ├── page.tsx            Live transaction feed
+│           ├── alerts/             Alert triage queue
+│           ├── transactions/[id]/  Transaction investigation detail
+│           ├── analytics/          Charts and performance metrics
+│           └── admin/              Rules, users, audit logs, system health
 ├── docs/
+│   ├── api.md                      Full API reference
 │   ├── query-optimization.md       EXPLAIN ANALYZE results
-│   └── ci-setup.md                 CI/CD configuration
-├── .github/workflows/ci.yml        GitHub Actions
-├── docker-compose.yml              Development
-└── docker-compose.prod.yml         Production
+│   └── ci-setup.md                 CI/CD secrets configuration
+├── .github/workflows/ci.yml        GitHub Actions pipeline
+├── docker-compose.yml              Development stack
+├── docker-compose.prod.yml         Production stack
+└── .env.example                    All environment variables documented
 ```
 
 ---
 
-## Fraud Detection Rules
+## CI/CD pipeline
 
-| Rule | Trigger | Score |
-|---|---|---|
-| **Velocity** | Too many transactions in a short window | 15-25 |
-| **Amount Anomaly** | Amount significantly above 30-day average | 20-30 |
-| **Geo Mismatch** | Transaction from new or high-risk country | 20-25 |
-| **Time Anomaly** | Transaction during suspicious hours (2-5 AM) | 15 |
-| **Round Amount** | Suspiciously round amount above threshold | 15-25 |
-
-**Risk scoring:** Rules run in parallel. Composite score = sum of contributions, capped at 100.
-
-| Score | Severity | Action |
-|---|---|---|
-| 0-19 | Clean | No alert |
-| 20-39 | Low | Alert created |
-| 40-59 | Medium | Alert created |
-| 60-79 | High | Alert created |
-| 80-100 | Critical | Alert created, urgent review |
-
----
-
-## API Reference
-
-### Authentication
-
-```bash
-# Login
-POST /api/v1/auth/login
-{ "email": "analyst@fraudscope.dev", "password": "analyst123" }
-
-# Refresh token (uses httpOnly cookie automatically)
-POST /api/v1/auth/refresh
 ```
-
-### Transactions
-
-```bash
-# Ingest transaction (API key auth)
-POST /api/v1/transactions
-x-api-key: your-api-key
-{ "external_id": "TX-001", "account_id": "ACC-001", "amount": 150.00, ... }
-
-# List transactions (JWT auth)
-GET /api/v1/transactions?status=flagged&limit=25&page=1
-
-# Transaction detail with alerts and account history
-GET /api/v1/transactions/:id
-```
-
-### Alerts
-
-```bash
-# Alert queue
-GET /api/v1/alerts?status=new,reviewing&sort=risk_score:desc
-
-# Alert counts (sidebar badge)
-GET /api/v1/alerts/counts
-
-# Take action on alert
-POST /api/v1/alerts/:id/actions
-{ "action": "dismiss|escalate|investigate", "reason": "..." }
-```
-
-### Analytics
-
-```bash
-GET /api/v1/analytics/overview?from=2026-01-01&to=2026-01-31
-GET /api/v1/analytics/alert-volume?from=...&to=...
-GET /api/v1/analytics/severity?from=...&to=...
-GET /api/v1/analytics/rule-effectiveness?from=...&to=...
-GET /api/v1/analytics/resolution?from=...&to=...
-GET /api/v1/analytics/analyst-performance?from=...&to=...
-
-# Bust analytics cache (admin only)
-POST /api/v1/analytics/cache/bust
+Push or PR to main
+       │
+       ▼
+   test job
+   ├── npm ci (api + web)
+   ├── ESLint (api + web)
+   ├── Start PostgreSQL 16 + Redis 7 (services block)
+   ├── Run Knex migrations
+   ├── Jest --runInBand --coverage
+   └── Next.js production build
+       │
+       │  merge to main only
+       ▼
+   deploy job
+   ├── Railway CLI → API service + Worker service
+   └── Vercel CLI → Next.js frontend (--prod)
 ```
 
 ---
 
 ## Deployment
 
-### Railway (API + Worker)
+**Railway (API + Worker):** Each service is deployed from the same multi-stage Dockerfile. The API runs `node dist/index.js`. The Worker overrides the command to run `node dist/engine/worker.js`. A pre-deploy hook runs `knex migrate:latest` automatically on every deploy.
 
-Railway hosts the API server and rule engine worker as separate services
-connected to managed PostgreSQL and Redis plugins.
+**Vercel (Frontend):** Next.js standalone output mode produces a self-contained `server.js` (~100MB image vs ~600MB full). Deployed automatically on merge to main via GitHub Actions.
 
-#### 1. Create Railway project
-
+**Docker Compose (self-hosted):**
 ```bash
-npm install -g @railway/cli
-railway login
-railway init
-```
-
-#### 2. Provision plugins
-
-In the Railway dashboard for your project:
-- Click **New** > **Database** > **PostgreSQL** -- note the `DATABASE_URL`
-- Click **New** > **Database** > **Redis** -- note the `REDIS_URL`
-
-#### 3. Create API service
-
-```bash
-# From the repo root
-railway up --service api
-```
-
-Set environment variables in Railway dashboard under the API service:
-
-| Variable | Value |
-|---|---|
-| `NODE_ENV` | `production` |
-| `PORT` | `3002` |
-| `DATABASE_URL` | From PostgreSQL plugin (auto-linked) |
-| `REDIS_URL` | From Redis plugin (auto-linked) |
-| `JWT_ACCESS_SECRET` | Generate: `openssl rand -hex 32` |
-| `JWT_REFRESH_SECRET` | Generate: `openssl rand -hex 32` |
-| `API_KEY` | Generate: `openssl rand -hex 16` |
-| `CORS_ORIGIN` | Your Vercel frontend URL |
-| `LOG_LEVEL` | `info` |
-| `ANALYTICS_CACHE_TTL` | `300` |
-
-#### 4. Run migrations as a deploy hook
-
-In Railway, under the API service settings:
-
-**Deploy Command:**
-```
-node -r ./node_modules/tsx/dist/cjs/index.cjs ./node_modules/.bin/knex migrate:latest --knexfile src/config/knexfile.js && node dist/index.js
-```
-
-Or set a **Pre-deploy Command:**
-```
-node -r ./node_modules/tsx/dist/cjs/index.cjs ./node_modules/.bin/knex migrate:latest --knexfile src/config/knexfile.js
-```
-
-This runs migrations automatically on every deploy before the server starts.
-
-#### 5. Create Worker service
-
-In Railway dashboard, click **New Service** > **GitHub Repo** (same repo).
-
-Set the **Start Command** to:
-```
-node dist/engine/worker.js
-```
-
-Set the same `DATABASE_URL`, `REDIS_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` as the API service.
-
-The worker does not need `PORT`, `CORS_ORIGIN`, or `API_KEY`.
-
-#### 6. Seed production data
-
-After migrations run, seed the initial users and detection rules:
-
-```bash
-railway run --service api node -r ./node_modules/tsx/dist/cjs/index.cjs ./node_modules/.bin/knex seed:run --knexfile src/config/knexfile.js
-```
-
-Or connect directly via psql and run the seed SQL manually.
-
----
-
-### Vercel (Frontend)
-
-#### 1. Link the project
-
-```bash
-cd apps/web
-npx vercel link
-# Follow prompts -- creates .vercel/project.json
-```
-
-#### 2. Set environment variables in Vercel dashboard
-
-| Variable | Value |
-|---|---|
-| `NEXT_PUBLIC_API_URL` | Your Railway API URL (e.g. https://fraudscope-api.railway.app) |
-| `JWT_ACCESS_SECRET` | Same value as Railway API service |
-
-#### 3. Deploy
-
-```bash
-cd apps/web
-npx vercel --prod
-```
-
-Or push to `main` and let GitHub Actions deploy automatically.
-
----
-
-### Self-hosted with Docker Compose
-
-For VPS deployment (DigitalOcean, EC2, etc.):
-
-```bash
-# On your server
-git clone https://github.com/your-username/fraudscope.git
-cd fraudscope
-
-# Create production env file
-cp .env.example .env.prod
-# Edit .env.prod with production values
-
-# Start production stack
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
-
-# Run migrations
-docker compose -f docker-compose.prod.yml exec api \
-  node -r ./node_modules/tsx/dist/cjs/index.cjs \
-  ./node_modules/.bin/knex migrate:latest \
-  --knexfile src/config/knexfile.js
-
-# Check status
-docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs -f api
 ```
+
+Full deployment guide: [README.md#deployment](README.md#deployment) in the repository.
 
 ---
 
-## Environment Variables
+## Resume bullets
 
-### API (`apps/api`)
+This project demonstrates the following production engineering skills:
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DATABASE_URL` | Yes | -- | PostgreSQL connection string |
-| `REDIS_URL` | Yes | -- | Redis connection string |
-| `JWT_ACCESS_SECRET` | Yes | -- | JWT signing secret (min 16 chars) |
-| `JWT_REFRESH_SECRET` | Yes | -- | JWT refresh signing secret |
-| `API_KEY` | Yes | -- | API key for transaction ingestion |
-| `PORT` | No | `3002` | HTTP port |
-| `CORS_ORIGIN` | Yes | -- | Frontend URL for CORS |
-| `NODE_ENV` | No | `development` | `development`/`test`/`production` |
-| `LOG_LEVEL` | No | `info` | `debug`/`info`/`warn`/`error` |
-| `ANALYTICS_CACHE_TTL` | No | `300` | Redis cache TTL in seconds |
-| `SIM_ENABLED` | No | `false` | Enable transaction simulator |
-| `SIM_RATE` | No | `5` | Simulator transactions per second |
-| `SIM_FRAUD_RATIO` | No | `0.10` | Fraction of simulated fraud |
-
-### Web (`apps/web`)
-
-| Variable | Required | Description |
-|---|---|---|
-| `NEXT_PUBLIC_API_URL` | Yes | Backend API base URL |
-| `JWT_ACCESS_SECRET` | Yes | For Edge middleware JWT verification |
-
----
-
-## CI/CD Pipeline
-
-GitHub Actions runs on every push and PR to `main`.
-
-```
-Push/PR to main
-      │
-      ▼
-  test job
-  ├── npm ci (api + web)
-  ├── ESLint (api + web)
-  ├── Spin up PostgreSQL + Redis (services)
-  ├── Run migrations
-  ├── Jest tests (--runInBand --coverage)
-  └── Next.js build
-      │
-      │ (only on push to main)
-      ▼
-  deploy job
-  ├── Railway deploy (API + Worker)
-  └── Vercel deploy (Web)
-```
-
-See `docs/ci-setup.md` for secret configuration.
-
----
-
-## Testing
-
-```bash
-# All tests
-docker compose exec api sh -c "cd apps/api && npm test"
-
-# Specific test file
-docker compose exec api sh -c "cd apps/api && npm test -- tests/auth.test.ts"
-
-# With coverage
-docker compose exec api sh -c "cd apps/api && npm test -- --coverage"
-
-# Detect open handles (if Jest hangs)
-docker compose exec api sh -c "cd apps/api && npm test -- --detectOpenHandles"
-```
-
-**Test coverage areas:**
-- Auth (register, login, refresh, protected routes)
-- Transactions (ingest, list, detail, pagination)
-- Alerts (list, counts, actions, state machine)
-- Rules (CRUD, parameter validation, toggle)
-- Engine (velocity, amount anomaly, geo mismatch, time anomaly, round amount)
-- Alert generation (composite scoring, DB atomicity)
-
----
-
-## Performance
-
-Query optimization applied to all major database queries. See `docs/query-optimization.md` for full EXPLAIN ANALYZE results.
-
-**Key indexes:**
-
-```sql
--- Transaction list by status (dashboard live feed)
-CREATE INDEX idx_tx_status_created ON transactions(status, created_at DESC);
-
--- Alert queue by risk score
-CREATE INDEX idx_alerts_status_score ON alerts(status, risk_score DESC);
-
--- Audit log date filter (grows unboundedly -- most critical index)
-CREATE INDEX idx_audit_created ON audit_logs(created_at DESC);
-```
-
-**All dashboard queries under 10ms on seed dataset (target was 100ms).**
+- **Built a real-time fraud detection pipeline** processing transactions through a Redis Streams queue into a parallel rule engine (5 detection patterns), computing composite 0-100 risk scores and broadcasting alerts via Socket.io to a Next.js analyst dashboard
+- **Designed and implemented a full-stack SaaS product** with JWT authentication (access + refresh token pattern), role-based access control across analyst and admin tiers, and a complete audit trail on every state-changing operation
+- **Wrote 30+ integration tests** (Jest + Supertest) covering auth flows, rule evaluation, alert state machine transitions, and API pagination — running against real PostgreSQL and Redis in a CI services block
+- **Optimized PostgreSQL query performance** by 5x-42x across 12 major queries using EXPLAIN ANALYZE-guided composite indexes, and added Redis analytics caching (300s TTL) reducing repeated dashboard loads from 55ms to under 1ms
+- **Deployed a containerized monorepo** using multi-stage Docker builds (API ~80MB, web ~100MB), GitHub Actions CI/CD pipeline (lint + test + build on every PR, Railway + Vercel deploy on merge to main), and production Docker Compose with health checks, restart policies, and resource limits
 
 ---

@@ -197,6 +197,7 @@ export async function evaluate(
 // Alert generation — writes to PostgreSQL inside a transaction
 // Called when score >= 20
 //
+// ─────────────────────────────────────────
 // Operations (all-or-nothing):
 // 1. UPDATE transactions  SET status='flagged', processed_at=NOW()
 // 2. INSERT alerts         → get new alert UUID
@@ -219,6 +220,16 @@ async function generateAlert(
   // If any operation throws, Knex automatically rolls back (ROLLBACK)
   // and re-throws the error so the caller knows it failed
   await db.transaction(async (trx) => {
+    // ── Idempotency Check: Return existing alert if already created ────
+    const existing = await trx("alerts")
+      .where({ transaction_id: transaction.id })
+      .first();
+
+    if (existing) {
+      alertId = existing.id;
+      return;
+    }
+
     // ── Step 1: Mark transaction as flagged ───────────────────────
     await trx("transactions").where({ id: transaction.id }).update({
       status: "flagged",
@@ -348,6 +359,29 @@ export async function evaluateAndProcess(
         ? parseFloat(transaction.amount)
         : transaction.amount,
   };
+
+  // Idempotency: check if an alert already exists for this transaction
+  const existingAlert = await db("alerts")
+    .where({ transaction_id: normalizedTransaction.id })
+    .first();
+
+  if (existingAlert) {
+    return {
+      score: existingAlert.risk_score,
+      severity: existingAlert.severity,
+      alertId: existingAlert.id,
+      triggeredRules: [],
+    };
+  }
+
+  // Idempotency: check if transaction was already marked clean and processed
+  const txRecord = await db("transactions")
+    .where({ id: normalizedTransaction.id })
+    .first();
+
+  if (txRecord?.processed_at && txRecord.status === "clean") {
+    return { score: 0, severity: null, alertId: null, triggeredRules: [] };
+  }
 
   const { score, severity, triggeredRules } = await evaluate(
     normalizedTransaction,

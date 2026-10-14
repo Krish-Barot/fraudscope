@@ -10,8 +10,8 @@ import clsx from 'clsx';
 import { useAuth } from '../../lib/authContext';
 
 function LoginForm() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('analyst@fraudscope.dev');
+  const [password, setPassword] = useState('analyst123');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -138,11 +138,77 @@ function LoginForm() {
         )}
       </button>
 
-      {process.env.NODE_ENV === 'development' && (
-        <p className="text-center text-xs text-slate-600">
-          Dev: analyst@fraudscope.dev / analyst123
-        </p>
-      )}
+      {/* Demo Credentials Section */}
+      <div className="pt-3 border-t border-[#1E2535] space-y-2">
+        <div className="flex items-center justify-between text-xs text-slate-400">
+          <span className="font-semibold uppercase tracking-wider text-[11px] text-slate-400">
+            Demo Credentials
+          </span>
+          <span className="text-[11px] text-blue-400">Click to fill</span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setEmail('analyst@fraudscope.dev');
+              setPassword('analyst123');
+              setError('');
+            }}
+            className={clsx(
+              'p-2.5 bg-[#0D0F1A] border rounded-lg text-left transition-all',
+              email === 'analyst@fraudscope.dev'
+                ? 'border-blue-500/70 bg-blue-950/20 shadow-sm shadow-blue-500/10'
+                : 'border-[#1E2535] hover:border-slate-600 hover:bg-[#131929]'
+            )}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-semibold text-slate-200">
+                Analyst
+              </span>
+              <span className="text-[10px] bg-blue-950/80 text-blue-400 border border-blue-800/60 px-1.5 py-0.5 rounded font-mono">
+                Default
+              </span>
+            </div>
+            <div className="text-[11px] font-mono text-slate-300 truncate">
+              analyst@fraudscope.dev
+            </div>
+            <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+              PW: <span className="text-slate-300">analyst123</span>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setEmail('admin@fraudscope.dev');
+              setPassword('admin123');
+              setError('');
+            }}
+            className={clsx(
+              'p-2.5 bg-[#0D0F1A] border rounded-lg text-left transition-all',
+              email === 'admin@fraudscope.dev'
+                ? 'border-purple-500/70 bg-purple-950/20 shadow-sm shadow-purple-500/10'
+                : 'border-[#1E2535] hover:border-slate-600 hover:bg-[#131929]'
+            )}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-semibold text-slate-200">
+                Admin
+              </span>
+              <span className="text-[10px] bg-purple-950/80 text-purple-400 border border-purple-800/60 px-1.5 py-0.5 rounded font-mono">
+                Admin
+              </span>
+            </div>
+            <div className="text-[11px] font-mono text-slate-300 truncate">
+              admin@fraudscope.dev
+            </div>
+            <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+              PW: <span className="text-slate-300">admin123</span>
+            </div>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

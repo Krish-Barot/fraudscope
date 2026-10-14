@@ -4,11 +4,17 @@ import { z } from 'zod';
 const sharedSchema = z.object({
   DATABASE_URL: z
     .string({ required_error: 'DATABASE_URL is required' })
-    .startsWith('postgresql://', 'DATABASE_URL must start with postgresql://'),
+    .refine(
+      (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
+      'DATABASE_URL must start with postgresql:// or postgres://',
+    ),
 
   REDIS_URL: z
     .string({ required_error: 'REDIS_URL is required' })
-    .startsWith('redis://', 'REDIS_URL must start with redis://'),
+    .refine(
+      (url) => url.startsWith('redis://') || url.startsWith('rediss://'),
+      'REDIS_URL must start with redis:// or rediss://',
+    ),
 
   NODE_ENV: z
     .enum(['development', 'test', 'production'])
@@ -39,10 +45,11 @@ const apiSchema = sharedSchema.extend({
     .min(8, 'API_KEY must be at least 8 characters'),
 
   PORT: z.coerce
-    .number({ required_error: 'PORT is required' })
+    .number()
     .int()
     .min(1024)
-    .max(65535),
+    .max(65535)
+    .default(3002),
 
   CORS_ORIGIN: z
     .string({ required_error: 'CORS_ORIGIN is required' })
@@ -50,6 +57,8 @@ const apiSchema = sharedSchema.extend({
 
   JWT_ACCESS_EXPIRY: z.string().default('15m'),
   JWT_REFRESH_EXPIRY: z.string().default('7d'),
+  ENGINE_SECRET: z.string().optional(),
+  CRON_SECRET: z.string().optional(),
 });
 
 // ── Worker-only variables — only required when running the worker ──

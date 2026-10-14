@@ -8,8 +8,8 @@ const nextConfig: NextConfig = {
   },
 
   // Standalone output bundles server + deps into .next/standalone
-  // This is required for the Docker production build
-  output: 'standalone',
+  // When deploying to Vercel, native output is preferred
+  output: process.env.VERCEL ? undefined : 'standalone',
 
   // Allow images from the API server
   images: {
@@ -17,6 +17,10 @@ const nextConfig: NextConfig = {
       {
         protocol: 'https',
         hostname: '**.railway.app',
+      },
+      {
+        protocol: 'https',
+        hostname: '**.vercel.app',
       },
     ],
   },

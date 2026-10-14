@@ -2,11 +2,9 @@
 // Business logic for transaction operations
 
 import { db } from '../../config/database';
-import { redisClient, redisPublisher } from '../../config/redis';
 import { CreateTransactionInput } from './transaction.schema';
 
-const TX_STREAM = 'tx:incoming';
-const TX_PUBSUB = 'tx:live';
+import { enqueueTransaction } from '../engine/engine.service';
 
 function parseNumeric(val: any): number | null {
   if (val === null || val === undefined || val === '') return null;
@@ -46,32 +44,7 @@ export async function ingestTransaction(input: CreateTransactionInput) {
     })
     .returning('*');
 
-  await redisClient.xadd(
-    TX_STREAM, '*',
-    'id', transaction.id,
-    'external_id', transaction.external_id,
-    'account_id', transaction.account_id,
-    'amount', transaction.amount.toString(),
-    'currency', transaction.currency,
-    'country_code', transaction.country_code,
-    'channel', transaction.channel || '',
-    'created_at', transaction.created_at.toISOString(),
-  );
-
-  await redisPublisher.publish(
-    TX_PUBSUB,
-    JSON.stringify({
-      id: transaction.id,
-      account_id: transaction.account_id,
-      amount: transaction.amount,
-      currency: transaction.currency,
-      merchant_name: transaction.merchant_name,
-      country_code: transaction.country_code,
-      channel: transaction.channel,
-      status: 'clean',
-      created_at: transaction.created_at,
-    })
-  );
+  await enqueueTransaction(transaction);
 
   await db('audit_logs').insert({
     event_type: 'transaction.ingested',

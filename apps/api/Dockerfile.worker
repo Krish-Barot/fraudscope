@@ -1,14 +1,13 @@
-# apps/api/Dockerfile.worker
-# Same image as API but starts the worker process instead
-
 FROM node:20-alpine
+
+RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 
-COPY package*.json ./
-COPY apps/api/package*.json ./apps/api/
+COPY package.json package-lock.json ./
+COPY apps/api/package.json ./apps/api/
 
-RUN npm install
+RUN npm ci --workspace=apps/api --include-workspace-root
 
 ENV PATH="/app/node_modules/.bin:$PATH"
 

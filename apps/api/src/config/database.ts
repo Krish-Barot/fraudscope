@@ -1,25 +1,30 @@
 // apps/api/src/config/database.ts
 // This file creates the Knex instance that the rest of the app uses
 // to run queries. Import 'db' from here whenever you need to query.
-
 import knex from 'knex';
-import knexConfig from './knexfile';
+import path from 'path';
 
-// Pick the right config based on NODE_ENV
-const environment = process.env.NODE_ENV || 'development';
-const config = knexConfig[environment];
+// Use TEST_DATABASE_URL when running tests
+// This is set automatically by Jest via the test environment
+const connectionString = process.env.NODE_ENV === 'test'
+  ? (process.env.TEST_DATABASE_URL || 'postgresql://fraudscope:fraudscope123@localhost:5433/fraudscope_test')
+  : (process.env.DATABASE_URL || 'postgresql://fraudscope:fraudscope123@localhost:5432/fraudscope');
 
-// Create and export the database connection
-// This is a connection pool — Knex manages multiple connections automatically
-export const db = knex(config);
+export const db = knex({
+  client: 'pg',
+  connection: connectionString,
+  migrations: {
+    directory: path.resolve(__dirname, '../../migrations'),
+    loadExtensions: ['.ts'],
+  },
+});
 
-// Test the connection on startup
-export async function connectDatabase(): Promise<void>{
-    try {
-        await db.raw('SELECT 1'); // simplest possible query - just checks connection works
-        console.log('✅ Database connected !');
-    } catch (error) {
-        console.error('❌ Database connection failed : ', error);
-        process.exit(1); // crash the process — app is useless without a DB
-    }
+export async function connectDatabase(): Promise<void> {
+  try {
+    await db.raw('SELECT 1');
+    console.log('✅ Database connected');
+  } catch (error) {
+    console.error('❌ Database connection failed:', error);
+    process.exit(1);
+  }
 }

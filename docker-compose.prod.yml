@@ -1,0 +1,183 @@
+# docker-compose.prod.yml
+# Production Docker Compose configuration
+#
+# KEY DIFFERENCES FROM docker-compose.yml (dev):
+#
+# 1. No exposed database ports
+#    Dev exposes postgres:5432 and redis:6379 to the host so you can
+#    connect with a GUI tool (TablePlus, RedisInsight).
+#    Production: databases are internal-only. Only the API can reach them.
+#
+# 2. No simulator
+#    SIM_ENABLED=false -- no fake transaction generator in production.
+#    Real transactions come from the POST /api/v1/transactions endpoint.
+#
+# 3. NODE_ENV=production
+#    Enables production optimizations in Node.js (V8 optimizations,
+#    no dev-only middleware, reduced error verbosity to clients).
+#
+# 4. restart: unless-stopped on all services
+#    Docker restarts crashed containers automatically.
+#    "unless-stopped" means it restarts on crash but NOT if you
+#    manually run "docker stop" (useful for planned maintenance).
+#
+# 5. No volume mounts for source code
+#    Dev mounts ./apps/api into the container for hot reload.
+#    Production uses the baked-in image -- no live code changes.
+#
+# 6. Resource limits
+#    Prevents one service from starving others.
+#
+# USAGE:
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml logs -f api
+
+name: fraudscope-prod
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: fraudscope_postgres_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-fraudscope}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB:-fraudscope}
+    volumes:
+      # Named volume persists data across container restarts and upgrades
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - fraudscope_internal
+    # NO ports: block -- database is not accessible from outside Docker
+    # Only services on the fraudscope_internal network can reach it
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fraudscope}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ── Redis ───────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: fraudscope_redis_prod
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - redis_data:/data
+    networks:
+      - fraudscope_internal
+    # NO ports: block
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ── API Server ──────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runner
+    image: fraudscope-api:${IMAGE_TAG:-latest}
+    container_name: fraudscope_api_prod
+    restart: unless-stopped
+    ports:
+      # API is the only service exposed to the outside world
+      - "${PORT:-3002}:3002"
+    environment:
+      NODE_ENV:           production
+      PORT:               3002
+      LOG_LEVEL:          info
+      DATABASE_URL:       postgresql://${POSTGRES_USER:-fraudscope}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-fraudscope}
+      REDIS_URL:          redis://redis:6379
+      JWT_ACCESS_SECRET:  ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRY:  ${JWT_ACCESS_EXPIRY:-15m}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-7d}
+      API_KEY:            ${API_KEY}
+      CORS_ORIGIN:        ${CORS_ORIGIN}
+      ANALYTICS_CACHE_TTL: ${ANALYTICS_CACHE_TTL:-300}
+      SIM_ENABLED:        "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - fraudscope_internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3002/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ── Rule Engine Worker ──────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runner
+    image: fraudscope-api:${IMAGE_TAG:-latest}
+    container_name: fraudscope_worker_prod
+    restart: unless-stopped
+    # Worker uses the same image as the API but different entrypoint
+    command: ["node", "-e", "require('./dist/engine/worker.js')"]
+    environment:
+      NODE_ENV:            production
+      LOG_LEVEL:           info
+      DATABASE_URL:        postgresql://${POSTGRES_USER:-fraudscope}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-fraudscope}
+      REDIS_URL:           redis://redis:6379
+      JWT_ACCESS_SECRET:   ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET:  ${JWT_REFRESH_SECRET}
+      ENGINE_POLL_INTERVAL: ${ENGINE_POLL_INTERVAL:-100}
+      ANALYTICS_CACHE_TTL:  ${ANALYTICS_CACHE_TTL:-300}
+      SIM_ENABLED:         "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - fraudscope_internal
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+networks:
+  fraudscope_internal:
+    driver: bridge
+    # internal: true would block all external access but we need
+    # the api container to be able to reach external services
+    # (email, third-party APIs etc.) in future
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

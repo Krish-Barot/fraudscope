@@ -6,17 +6,20 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "build": "tsc",
+    "build": "tsc --outDir dist",
     "worker": "tsx src/engine/worker.ts",
+    "simulate": "tsx src/simulator/index.ts",
     "migrate": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:latest --knexfile src/config/knexfile.js",
+    "migrate:ci": "knex migrate:latest --knexfile src/config/knexfile.js",
     "migrate:rollback": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:rollback --knexfile src/config/knexfile.js",
     "migrate:status": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex migrate:status --knexfile src/config/knexfile.js",
     "seed": "node --require /app/node_modules/tsx/dist/cjs/index.cjs /app/node_modules/.bin/knex seed:run --knexfile src/config/knexfile.js",
-    "test": "jest --config jest.config.ts --runInBand",
+    "test": "NODE_ENV=test jest --config jest.config.js --runInBand",
     "lint": "eslint src/ --ext .ts"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "date-fns-tz": "^3.1.3",
     "dotenv": "^16.4.5",
@@ -31,6 +34,7 @@
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/jest": "^29.5.12",
@@ -39,9 +43,13 @@
     "@types/pg": "^8.11.6",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.61.1",
+    "@typescript-eslint/parser": "^8.61.1",
+    "eslint": "^9.39.5",
     "jest": "^29.7.0",
     "supertest": "^7.0.0",
     "ts-jest": "^29.1.4",
+    "ts-node": "^10.9.2",
     "tsx": "^4.15.7",
     "typescript": "^5.4.5"
   }

@@ -1,0 +1,14 @@
+node_modules
+*/node_modules
+*/*/node_modules
+.next
+apps/web/.next
+dist
+apps/api/dist
+.git
+.DS_Store
+*.log
+coverage
+.env
+.env.local
+.env.*.local

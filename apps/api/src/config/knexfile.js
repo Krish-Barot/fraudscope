@@ -4,6 +4,12 @@
 
 'use strict';
 
+try {
+  require('tsx/cjs');
+} catch {
+  // If tsx is already registered or unavailable
+}
+
 const path = require('path');
 
 /** @type {Object.<string, import('knex').Knex.Config>} */
